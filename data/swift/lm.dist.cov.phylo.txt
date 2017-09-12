@@ -1,0 +1,19 @@
+
+Call:
+lm(formula = finalCoverageAnna ~ finalDistanceAnna)
+
+Residuals:
+   Min     1Q Median     3Q    Max 
+-91.18 -39.74 -12.89  26.50 182.16 
+
+Coefficients:
+                  Estimate Std. Error t value Pr(>|t|)    
+(Intercept)        70.0355     0.6766  103.52   <2e-16 ***
+finalDistanceAnna 423.2795    33.4987   12.64   <2e-16 ***
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Residual standard error: 54.82 on 19718 degrees of freedom
+Multiple R-squared:  0.008032,	Adjusted R-squared:  0.007982 
+F-statistic: 159.7 on 1 and 19718 DF,  p-value: < 2.2e-16
+

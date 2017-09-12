@@ -1,0 +1,30 @@
+# Number of off target loci
+```{bash, eval=F}
+wc -l offtarget.anna.bed
+137351 offtarget.anna.bed
+```
+```{bash, eval=F}
+$ wc -l offtarget.swift.bed
+74998 offtarget.swift.bed
+```
+
+# Number of off target loci with coverage 0
+
+```{R}
+coverageMatrixAnnaFile="/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/offtarget1.coverage.matrix.per.target.txt"
+coverageMatrixSwiftFile="/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/offtarget1.coverage.matrix.per.target.txt"
+coverageMatrixAnna=read.table(coverageMatrixAnnaFile, stringsAsFactors=F)
+coverageMatrixSwift=read.table(coverageMatrixSwiftFile, stringsAsFactors=F)
+totalOffTargetsAnna=nrow(coverageMatrixAnna)
+totalOffTargetsSwift=nrow(coverageMatrixSwift)
+
+
+covTargetAnna=rowSums(coverageMatrixAnna)
+covTargetSwift=rowSums(coverageMatrixSwift)
+lociOfftargetCapturedAnna=totalOffTargetsAnna-sum(covTargetAnna==0)
+lociOfftargetCapturedSwift=totalOffTargetsSwift-sum(covTargetSwift==0)
+d1=lociOfftargetCapturedAnna/totalOffTargetsAnna
+d2=lociOfftargetCapturedSwift/totalOffTargetsSwift
+
+mean(d1,d2)
+```

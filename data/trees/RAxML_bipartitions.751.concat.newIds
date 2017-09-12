@@ -1,0 +1,140 @@
+#NEXUS
+begin taxa;
+	dimensions ntax=48;
+	taxlabels
+	Pale-tailed_Barbthroat
+	Green_Hermit
+	Reddish_Hermit
+	Straight-billed_Hermit
+	White-tipped_Sicklebill
+	Crimson_Topaz
+	White-necked_Jacobin
+	Swift[&!color=#-6710887]
+	Emerald-bellied_Puffleg
+	Chestnut-breasted_Coronet
+	Booted_Racket-tail
+	Sword-billed_Hummingbird
+	Bronzy_Inca
+	Shining_Sunbeam
+	Green-crowned_Brilliant
+	Amethyst_Woodstar
+	Slender-tailed_Woodstar
+	Ruby-throated_Hummingbird
+	Rufous_Hummingbird
+	'Anna''s_Hummingbird'
+	Fiery-throated_Hummingbird
+	White-bellied_Mountaingem
+	Blue-tufted_Starthroat
+	Black-bellied_Hummingbird[&!color=#-16777216]
+	Bronze-tailed_Plumeleteer[&!color=#-16777216]
+	Fork-tailed_Woodnymph[&!color=#-16777216]
+	Red-billed_Streamertail[&!color=#-16777216]
+	Rufous-tailed_Hummingbird[&!color=#-16777216]
+	Rufous-throated_Sapphire[&!color=#-16777216]
+	Rufous-breasted_Sabrewing[&!color=#-16777216]
+	Giant_Hummingbird
+	Peacock_Coquette
+	Ecuadorian_Piedtail
+	Amethyst-throated_Sunangel
+	Long-tailed_Sylph
+	Andean_Hillstar
+	Rainbow-bearded_Thornbill
+	Tyrian_Metaltail
+	Red-tailed_Comet
+	Purple-backed_Thornbill
+	Green-tailed_Goldenthroat
+	Purple-throated_Carib
+	Black-throated_Mango
+	Purple-crowned_Fairy
+	Tooth-billed_Hummingbird
+	Sparkling_Violetear
+	Blue-fronted_Lancebill
+	Rufous-breasted_Hermit
+;
+end;
+
+begin trees;
+	tree tree_1 = [&R] (Pale-tailed_Barbthroat[&!color=#-3407821]:0.010656684021519027,((Green_Hermit[&!color=#-3407821]:0.005284565032424491,(Reddish_Hermit[&!color=#-3407821]:0.005853291868800921,Straight-billed_Hermit[&!color=#-3407821]:0.006517934357121865)[&!color=#-3407821,pp=100]:8.630835813225847E-4)[&!color=#-3407821,pp=100]:0.00468581604611386,(White-tipped_Sicklebill[&!color=#-3407821]:0.01855708863185086,((Crimson_Topaz[&!color=#-16751002]:0.016969217079882977,White-necked_Jacobin[&!color=#-16751002]:0.03780358521992989)[&!color=#-16751002,pp=100]:0.0027605695245890476,(Swift:0.105236626037608,(((Emerald-bellied_Puffleg[&!color=#-10092493]:0.014050336823953239,(((Chestnut-breasted_Coronet[&!color=#-10092493]:0.006738675756055865,Booted_Racket-tail[&!color=#-10092493]:0.0071895290678845964)[&!color=#-10092493,pp=100]:0.0010357989592770821,((Sword-billed_Hummingbird[&!color=#-10092493]:0.007033839669262953,Bronzy_Inca[&!color=#-10092493]:0.007835283072197859)[&!color=#-10092493,pp=100]:3.7341417972947905E-4,Shining_Sunbeam[&!color=#-10092493]:0.00848984548520821)[&!color=#-10092493,pp=59]:2.3589047188066502E-4)[&!color=#-10092493,pp=83]:6.102753158225427E-4,Green-crowned_Brilliant[&!color=#-10092493]:0.010396270205090371)[&!color=#-10092493,pp=100]:5.13591449648041E-4)[&!color=#-10092493,pp=100]:0.002313826267315088,((((((Amethyst_Woodstar[&!color=#-6750055]:0.0029828763244106053,Slender-tailed_Woodstar[&!color=#-6750055]:0.0025888535125606436)[&!color=#-6750055,pp=100]:0.001861578306652902,(Ruby-throated_Hummingbird[&!color=#-6750055]:0.008849507821022649,(Rufous_Hummingbird[&!color=#-6750055]:0.0073938974904958574,'Anna''s_Hummingbird'[&!color=#-6750055]:0.0038994026598178863)[&!color=#-6750055,pp=100]:6.865426664417744E-4)[&!color=#-6750055,pp=100]:6.338802436679235E-4)[&!color=#-6750055,pp=100]:0.0038868407308285317,(Fiery-throated_Hummingbird[&!color=#-3355648]:0.008037946127921901,(White-bellied_Mountaingem[&!color=#-3355648]:0.008148368059748634,Blue-tufted_Starthroat[&!color=#-3355648]:0.008302292687243296)[&!color=#-3355648,pp=60]:7.511756314084931E-4)[&!color=#-3355648,pp=100]:6.357401919812488E-4)[&pp=100]:9.117745477766312E-4,(((Black-bellied_Hummingbird[&!color=#-16738048]:0.007369906113573181,(Bronze-tailed_Plumeleteer[&!color=#-16738048]:0.00527156112530171,Fork-tailed_Woodnymph[&!color=#-16738048]:0.006919525729880764)[&!color=#-16738048,pp=100]:0.00123975248169539)[&!color=#-16738048,pp=100]:0.002450285379974907,(Red-billed_Streamertail[&!color=#-16738048]:0.005047067225364276,(Rufous-tailed_Hummingbird[&!color=#-16738048]:0.004268715813575276,Rufous-throated_Sapphire[&!color=#-16738048]:0.0054313185739458154)[&!color=#-16738048,pp=74]:7.123235111695501E-4)[&!color=#-16738048,pp=100]:0.0033927384228691023)[&!color=#-16738048,pp=100]:0.0015757435231709557,Rufous-breasted_Sabrewing[&!color=#-16738048]:0.007832161419362101)[&!color=#-16738048,pp=100]:0.0023305457234133907)[&!rotate=true,pp=100]:0.0015083150248512923,Giant_Hummingbird:0.008668120154310366)[&pp=100]:0.003447398449783558,(Peacock_Coquette[&!color=#-13434778]:0.012112189482899915,(Ecuadorian_Piedtail[&!color=#-13434778]:0.019710357078304878,(Amethyst-throated_Sunangel[&!color=#-13434778]:0.008538702581482883,(Long-tailed_Sylph[&!color=#-13434778]:0.0071511686820882525,((Andean_Hillstar[&!color=#-13434778]:0.006767264581734924,(Rainbow-bearded_Thornbill[&!color=#-13434778]:0.005294290976071597,Tyrian_Metaltail[&!color=#-13434778]:0.004812906689371526)[&!color=#-13434778,pp=100]:7.78433538402819E-4)[&!color=#-13434778,pp=100]:3.5347433614337957E-4,(Red-tailed_Comet[&!color=#-13434778]:0.0034523833683632503,Purple-backed_Thornbill[&!color=#-13434778]:0.004411889271947284)[&!color=#-13434778,pp=100]:0.0013260065125306347)[&!color=#-13434778,pp=100]:5.089643720702197E-4)[&!color=#-13434778,pp=100]:0.002726075637909682)[&!color=#-13434778,pp=100]:6.579958504153631E-4)[&!color=#-13434778,pp=100]:8.379981888612391E-4)[&!color=#-13434778,pp=100]:0.0032369836317287515)[&pp=100]:0.0012200948836173467)[&!rotate=true,pp=100]:0.006661227518371949,(((Green-tailed_Goldenthroat[&!color=#-16777063]:0.008921072335334564,(Purple-throated_Carib[&!color=#-16777063]:0.008293258063993763,Black-throated_Mango[&!color=#-16777063]:0.005056954101201112)[&!color=#-16777063,pp=100]:0.005419173917222118)[&!color=#-16777063,pp=100]:0.006607692350838689,(Purple-crowned_Fairy[&!color=#-16777063]:0.013656440138715174,Tooth-billed_Hummingbird[&!color=#-16777063]:0.014410836485957704)[&!color=#-16777063,pp=100]:0.002759736312294495)[&!color=#-16777063,pp=100]:0.001457961239828598,(Sparkling_Violetear[&!color=#-16777063]:0.013745156651755202,Blue-fronted_Lancebill[&!color=#-16777063]:0.009152066073117093)[&!color=#-16777063,pp=100]:0.004734009275957837)[&!color=#-16777063,pp=100]:0.0013336195118133574)[&pp=100]:0.003744896330009017)[&!rotate=true,pp=100]:0.0013554392560618243)[&!color=#-3407821,pp=100]:0.002903551213737449)[&!color=#-3407821,pp=100]:0.0053757649803396566)[&!color=#-3407821,pp=100]:0.0032868485052203814,Rufous-breasted_Hermit[&!color=#-3407821]:0.010164753283869421);
+end;
+
+begin figtree;
+	set appearance.backgroundColorAttribute="Default";
+	set appearance.backgroundColour=#-1;
+	set appearance.branchColorAttribute="User selection";
+	set appearance.branchLineWidth=1.0;
+	set appearance.branchMinLineWidth=0.0;
+	set appearance.branchWidthAttribute="Fixed";
+	set appearance.foregroundColour=#-16777216;
+	set appearance.selectionColour=#-2144520576;
+	set branchLabels.colorAttribute="User selection";
+	set branchLabels.displayAttribute="Branch times";
+	set branchLabels.fontName="sansserif";
+	set branchLabels.fontSize=8;
+	set branchLabels.fontStyle=0;
+	set branchLabels.isShown=false;
+	set branchLabels.significantDigits=4;
+	set layout.expansion=0;
+	set layout.layoutType="RECTILINEAR";
+	set layout.zoom=0;
+	set legend.attribute="pp";
+	set legend.fontSize=10.0;
+	set legend.isShown=false;
+	set legend.significantDigits=4;
+	set nodeBars.barWidth=4.0;
+	set nodeBars.displayAttribute=null;
+	set nodeBars.isShown=false;
+	set nodeLabels.colorAttribute="User selection";
+	set nodeLabels.displayAttribute="pp";
+	set nodeLabels.fontName="Arial";
+	set nodeLabels.fontSize=8;
+	set nodeLabels.fontStyle=0;
+	set nodeLabels.isShown=true;
+	set nodeLabels.significantDigits=4;
+	set nodeShape.colourAttribute="User selection";
+	set nodeShape.isShown=false;
+	set nodeShape.minSize=10.0;
+	set nodeShape.scaleType=Width;
+	set nodeShape.shapeType=Circle;
+	set nodeShape.size=4.0;
+	set nodeShape.sizeAttribute="Fixed";
+	set polarLayout.alignTipLabels=false;
+	set polarLayout.angularRange=0;
+	set polarLayout.rootAngle=0;
+	set polarLayout.rootLength=100;
+	set polarLayout.showRoot=true;
+	set radialLayout.spread=0.0;
+	set rectilinearLayout.alignTipLabels=false;
+	set rectilinearLayout.curvature=0;
+	set rectilinearLayout.rootLength=97;
+	set scale.offsetAge=0.0;
+	set scale.rootAge=1.0;
+	set scale.scaleFactor=1.0;
+	set scale.scaleRoot=false;
+	set scaleAxis.automaticScale=true;
+	set scaleAxis.fontSize=8.0;
+	set scaleAxis.isShown=false;
+	set scaleAxis.lineWidth=1.0;
+	set scaleAxis.majorTicks=1.0;
+	set scaleAxis.origin=0.0;
+	set scaleAxis.reverseAxis=false;
+	set scaleAxis.showGrid=true;
+	set scaleBar.automaticScale=true;
+	set scaleBar.fontSize=10.0;
+	set scaleBar.isShown=true;
+	set scaleBar.lineWidth=1.0;
+	set scaleBar.scaleRange=0.0;
+	set tipLabels.colorAttribute="User selection";
+	set tipLabels.displayAttribute="Names";
+	set tipLabels.fontName="Arial";
+	set tipLabels.fontSize=11;
+	set tipLabels.fontStyle=1;
+	set tipLabels.isShown=true;
+	set tipLabels.significantDigits=4;
+	set trees.order=false;
+	set trees.orderType="increasing";
+	set trees.rooting=true;
+	set trees.rootingType="User Selection";
+	set trees.transform=false;
+	set trees.transformType="cladogram";
+end;
+

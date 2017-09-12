@@ -1,0 +1,2432 @@
+---
+title: "Analysis of coverage in capture experiments (v.5)"
+author: "Merly Escalona <merlyescalona@uvigo.es>"
+output:
+  html_document:
+    theme: cosmo
+    toc: yes
+  html_notebook:
+    theme: cosmo
+---
+
+```{R libraries, echo=F}
+packages<-c("ape","geiger","apTreeshape","ggplot2","gplots","RColorBrewer","knitr","phangorn","futile.logger","phytools","shiny", "gdata")
+for(pkg in packages ){
+  suppressMessages(library(pkg,character.only=TRUE,quietly=TRUE))
+}
+# Helpful functions: http://stackoverflow.com/a/6463946
+roundUp <- function(x) 10^ceiling(log10(x))
+roundUpNice <- function(x, nice=c(1,2,4,5,6,8,10)) {
+    if(length(x) != 1) stop("'x' must be of length 1")
+    10^floor(log10(x)) * nice[[which(x <= 10^floor(log10(x)) * nice)[[1]]]]
+}
+```
+
+# Introduction
+
+In order to integrate a new feature of on/off target levels of coverage in NGSphy, I needed to understand coverage variation that  one could find in a capture experiment. Goals are basically:
+
+  1. Understand the coverage variation within individuals and loci to be able to model it for both NGSphy parameterization and furthers simulations.
+  2. Find out whether there is a correlation between the coverage and the phylogenetic distance to the reference species that were used for the probe generation.
+  Expecting that the closer the sample is to the reference the higher the coverage obtained is.
+
+# Data description
+
+## General
+- **Reference genomes**: Reference genomes for ***Calypte anna*** [ [1] ](#anna-ref) and ***Chaetura pelagica*** [ [2] ](#swift-ref) are available. As well as the codon regions per species ( `Calypte_anna.gene.CDS.gff` and `Chaetura_pelagica.CDS.gff` )
+
+*Genome sizes*
+
+```{R, echo=F}
+genomeSizesAnna=read.table(paste0("/media/merly/Baymax/research/cph-visit/coverage-analysis/ref/Calypte_anna.sizes"),
+                           colClasses=c("character", "numeric"),
+                           col.names=c("Scaffold","Size"),
+                           stringsAsFactors=F)
+genomeSizesSwift=read.table(paste0("/media/merly/Baymax/research/cph-visit/coverage-analysis/ref/Chaetura_pelagica.sizes"),
+                            colClasses=c("character", "numeric"),
+                            col.names=c("Scaffold","Size"),
+                            stringsAsFactors=F)
+
+genomeSizes=data.frame(
+  anna=prettyNum(sum(genomeSizesAnna$Size), big.mark = ","),
+  swift=prettyNum(sum(genomeSizesSwift$Size), big.mark = ","))
+colnames(genomeSizes)=c("Anna","Swift")
+kable(genomeSizes,format="markdown")
+```
+
+- **One-to-one orthologs**: There is information available about the one-to-one ortholog relation between the species from the Avian Genome Consortium . (`48birds_ortholog.list.chi.anna.cpe.hum.finch`).
+
+## Hummingbirds paper
+
+Data used comes from  Rute's Hummingbird project. Most of the information reported here about the samples and targets was extracted from the paper.
+
+- **Samples**: species were chosen so that all the nine major Trochiliform clades reported by Bleiweiss et al. [ [3] ](#Bleiweiss) and McGuire et al. [ [4] ](#McGuire) and many of the characteristic subclades illustrated by McGuire et al. [[2]](#McGuire) were represented.
+    - 32 species - the National Museum of Natural History, Smithsonian Institution
+    - 14 species - the Louisiana State University Museum of Natural Sciences
+
+- **Target regions**: probes were selected from one-to-one orthologs between chicken (*Gallus gallus*) and zebra finch (*Taeniopygia guttata*) as annotated in ENSEMBL
+version 66 annotation resulting in a final set:
+    - 166.322 probes
+    - corresponding to 2950 genes
+    - summing up to approximately 20 Mb (for an approximately 7 Mb of total captured sequence).
+    - final analysis was made with 2750 genes, left after removing genes with missing data.
+
+- The **datasets** I'm using `BAM` files corresponding to the mappings of the targeted-sequencing to 2 references.
+    - 46 files, corresponding to the samples mapped to an ingroup *Calypte anna* (from now on called `map2Anna`).
+        - 46 samples - targeted sequencing
+    - 48 files, corresponding to the samples an outgroup  *Chaetura pelagica* (from now on called `map2Swift`).
+        - 46 samples - targeted sequencing
+        - 2 samples - whole genome sequencing (Anna + Swift)
+
+
+
+<div class="panel panel-danger">
+<div class="panel-heading">
+<h3 class="panel-title">**Missing data**</h3>
+</div>
+<div class="panel-body">
+Need more information on missing data id + removal
+</div>
+</div>
+
+
+## Processing and storage
+
+Workspace `triploid` (UVigo):
+
+  - Original data from Dataset 1, is stored in: `triploid.uvigo.es`
+  - Under the user folder: `/home/merly/research/cph-visit/coverage-analysis`
+
+Workspace `randy` (KU):
+
+  - Original data from Dataset 1 and 2, is stored in: `randy.popgen.dk`
+  - Under the user folder:
+      - `/home/merly/anna`
+      - `/home/merly/swift`
+
+
+# Targeted regions
+
+Targeted regions are exons, retrieved a posteriori,  due to the fact that the original probes for this project were lost during a flood.
+
+- **`Ingroup species reference`**: Original target file given was a GFF file: `Calypte_anna.gene.CDS.2750.gff` [1.6MB].
+This contains the exons from the **2,750** This file was converted into a BED file, keeping only chromosome (scaffold),
+start and end position of the targets.
+    1. Filtering regions with size 0
+
+- **`Outgroup reference:`**: For this one, I received 2 files. One that had the known one-to-one ortholog relation  between the genes from Anna and Swift (`48birds_ortholog.list.chi.anna.cpe.hum.finch` [656KB]).
+The second, is a GFF file, which contains the exons from Swift (`Chaetura_pelagica.CDS.gff`[8.5MB]). I had to get the targeted regions from the GFF files, taking into account that I needed the genes matching to Anna, and also I needed those genes that were actually used in the Anna's targets  (`Calypte_anna.gene.CDS.2750.gff`):
+    1. Keep the gene that matched both Anna and Swift species within this file `48birds_ortholog.list.chi.anna.cpe.hum.finch`.
+    2. Filter out those where there was no match  (Gene in Anna == "-" or Gene in Swift == "-")
+    3. Filtering regions with size 0
+    4. Check that all the targets in `Chaetura_pelagica.CDS.gff` where codon regions (`CDS`).
+    5. Match the genes obtained in (4), to the data in `Calypte_anna.gene.CDS.2750.gff` so I'll have the same covered genes.
+    6. Match the resulting genes from  (5) to `Chaetura_pelagica.CDS.gff` and keep those targets from genes matching both Anna and Swift.
+
+Finally, datasets will be filter to match gene number.
+
+```{R,echo=F}
+WD="/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/"
+# WD="/home/merly/files/"
+```
+```{R}
+birds48filename=paste0(WD,"48birds_ortholog.list.chi.anna.cpe.hum.finch")
+swiftgff=paste0(WD,"Chaetura_pelagica.CDS.gff")
+annagff=paste0(WD,"Calypte_anna.gene.CDS.2750.gff")
+birds=read.table(birds48filename, header=T,
+    colClasses=c("character","numeric","character","character",
+      "character","character","character"))
+swift=read.table(swiftgff,
+    colClasses=c("character","character","character","numeric",
+      "numeric","character","character","character","character"))
+anna=read.table(annagff,
+    colClasses=c("character","character","character","numeric",
+      "numeric","character","character","character","character"))
+
+birds.2=birds[birds$anna!="-",]
+birds.3=birds.2[birds.2$swift!="-",]
+birds.4=unique(birds.3)
+birds.5=birds.4[,c("anna","swift")]
+birds.5$swift=paste0("Parent=",birds.5$swift,";")
+birds.5$anna=paste0("Parent=Aan_", birds.5$anna,";")
+annaGenes=unique(anna$V9[birds.5$anna %in% anna$V9])
+birds.6=birds.5[birds.5$anna %in% annaGenes, ]
+swiftGenes=birds.6$swift
+
+swift.2=swift[swift$V3=="CDS",]
+swift.3=swift.2[swift.2$V9 %in% birds.6$swift,]
+swift.3$size=swift.3$V5-swift.3$V4
+swift.4=swift.3[swift.3$size>0,]
+anna.2=anna[(anna$V5-anna$V4)>0,]
+swift.4=swift.4[,1:(ncol(swift.4)-1)]
+anna.3=anna.2[anna.2$V9 %in% unique(birds.6$anna),]
+anna.3$targetname=paste0( anna.3$V1,
+  rep("-", nrow(anna.3)),
+  anna.3$V4,
+  rep("-", nrow(anna.3)),
+  anna.3$V5)
+swift.4$targetname=paste0( swift.4$V1,
+  rep("-", nrow(swift.4)),
+  swift.4$V4,
+  rep("-", nrow(swift.4)),
+  swift.4$V5)
+
+```
+
+### Description of the targeted regions
+
+This is a quantitative summary description of the resulting target files. The difference  between number of genes, and subsequently in number of targets and covered genome,  in both Anna and Swift, is not precisely alarming. The experiment was done using known ortholog genes, which not necessarily match in number of exons (targets) or their size. There are  two (`2`) Anna datasets, the original and the reduced (1,469 genes) and the Swift dataset.
+
+```{R data.load, echo=F}
+nGenesSwift=length(unique(swift.4$V9))
+nGenesAnna=length(unique(anna.2$V9))
+# ------------------------------------------------------------------------------
+targetsBedFile=paste0(WD,"targets.anna.2.bed")
+targets=read.table(targetsBedFile, stringsAsFactors=F)
+targets$V4=targets$V3-targets$V2
+colnames(targets)=c("Scaffold","Start","End","Size")
+rownames(targets)=paste0( targets$Scaffold,
+  rep("-", nrow(targets)),
+  targets$Start,
+  rep("-", nrow(targets)),
+  targets$End)
+numTargets=nrow(targets)
+totalBases=sum(targets$Size)
+scaffoldsSplit=split(targets, targets$Scaffold)
+totalScaffolds=length(scaffoldsSplit)
+totalTargetPerScaffold=sapply(scaffoldsSplit,nrow)
+# ------------------------------------------------------------------------------
+# Reduced
+reducedTargets=read.table(paste0(WD,"targets.anna.3.bed"), stringsAsFactors=F)
+reducedTargets$V4=reducedTargets$V3-reducedTargets$V2
+colnames(reducedTargets)=c("Scaffold","Start","End","Size")
+rownames(reducedTargets)=paste0(reducedTargets$Scaffold,
+  rep("-", nrow(reducedTargets)),
+  reducedTargets$Start,
+  rep("-", nrow(reducedTargets)),
+  reducedTargets$End)
+numReducedTargets=nrow(reducedTargets)
+totalBasesReduced=sum(reducedTargets$Size)
+scaffoldsReduced=scaffoldsSplit[names(scaffoldsSplit) %in% unique(anna.3$V1)]
+totalScaffoldsReduced=length(scaffoldsReduced)
+# ------------------------------------------------------------------------------
+targetSwiftBedFile=paste0(WD,"targets.swift.2.bed")
+targetsSwift=read.table(targetSwiftBedFile, stringsAsFactors=F)
+targetsSwift$V4=targetsSwift$V3-targetsSwift$V2
+colnames(targetsSwift)=c("Scaffold","Start","End","Size")
+rownames(targetsSwift)=paste0(targetsSwift$Scaffold,
+  rep("-", nrow(targetsSwift)),
+  targetsSwift$Start,
+  rep("-", nrow(targetsSwift)),
+  targetsSwift$End)
+numTargetsSwift=nrow(targetsSwift)
+totalBasesSwift=sum(targetsSwift$Size)
+scaffoldsSplitSwift=split(targetsSwift, targetsSwift$Scaffold)
+totalScaffoldsSwift=length(scaffoldsSplitSwift)
+totalTargetPerScaffoldSwift=sapply(scaffoldsSplitSwift,nrow)
+
+# -----------------------------------------------------------------------------------------------------------------------------------------------
+descriptionTargets=data.frame(
+  NumTargets=prettyNum(c(numTargets,numReducedTargets, numTargetsSwift), big.mark = ","),
+  SizeOfTargetedGenome=prettyNum(c(totalBases, totalBasesReduced,totalBasesSwift), big.mark = ","),
+  nGenes=prettyNum(c(nGenesAnna,length(unique(anna.3$V9)),nGenesSwift),big.mark = ","),
+  TotalScaffolds=prettyNum(c(totalScaffolds,totalScaffoldsReduced, totalScaffoldsSwift), big.mark = ",")
+)
+rownames(descriptionTargets)=c("Anna - Original","Anna - Reduced","Swift")
+colnames(descriptionTargets)=c(
+  "Number of targets",
+  "Size of targeted genome (bp)",
+  "Number of genes",
+  "Total of scaffolds"
+)
+kable(descriptionTargets,format="markdown")
+
+# gfforiginal=read.table(gzfile("/media/merly/Baymax/research/cph-visit/coverage-analysis/ref/GigaNDB/Calypte_anna.gff.gz"), stringsAsFactors = F)
+#
+# gfforiginal$Size=gfforiginal$V5-gfforiginal$V4
+# gfforiginal=gfforiginal[gfforiginal$V3=="CDS",]
+# head(gfforiginal)
+# d=gfforiginal[gfforiginal$V9 %in% paste0("Parent=Aan_",birds.6$anna, ";"),]#
+# prettyNum(sum(gfforiginal[gfforiginal$V3=="CDS",]$Size), big.mark = ",")
+# prettyNum(sum(d[d$V3=="CDS",]$Size), big.mark = ",")
+```
+
+
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**SARA COMMENT**</h3>
+</div>
+<div class="panel-body">
+- So, the size of the "targeted genome" in both Anna and Swift is ~3.9Mb
+and ~2.2Mb... that's quite a difference from the "rough" reported 7M in
+the paper ... [just a comment...]
+</div>
+<div class="panel-footer">
+-  This is information I could compute from the data I received.
+</div></div>
+
+## Number of targeted regions per gene
+
+```{R, echo=F, fig.width=12}
+agSplit=split(anna.2, anna.2$V9)
+sgSplit=split(swift.4, swift.4$V9)
+totalTargetPerGenesA=sapply(agSplit,nrow)
+totalTargetPerGenesS=sapply(sgSplit,nrow)
+maxX=max(length(totalTargetPerGenesA), length(totalTargetPerGenesA))
+maxY=roundUpNice(max(unlist(totalTargetPerGenesS), unlist(totalTargetPerGenesS)))
+layout(matrix(c(1,2),1,2))
+plot(totalTargetPerGenesA,pch=16, col="gray77", xlim=c(0,maxX), ylim=c(0,maxY),axes=F, xlab="Genes", ylab="Number of targeted regions", main="Anna")
+points(totalTargetPerGenesA[unique(anna.3$V9)],pch=16, col="darkred", xlim=c(0,maxX), ylim=c(0,maxY))
+axis(2, las=2); axis(1)
+legend("topright",col=c("gray77","darkred"), pch=20, legend = c("Original dataset", "Reduced (Matched genes)"))
+plot(totalTargetPerGenesS,pch=16, col="darkblue", xlim=c(0,maxX), ylim=c(0,maxY),axes=F, xlab="Genes", ylab="",main="Swift")
+axis(2, las=2); axis(1)
+```
+
+## Number of targeted regions per scaffold
+
+- Scaffolds:  where genes are located.
+
+```{R echo=F, fig.width=12}
+maxX=max(length(totalTargetPerScaffold), length(totalTargetPerScaffoldSwift))
+maxY=roundUpNice(max(unlist(totalTargetPerScaffold), unlist(totalTargetPerScaffoldSwift)))
+
+layout(matrix(c(1,2),1,2))
+plot(totalTargetPerScaffold,pch=16, col="gray77", xlim=c(0,maxX), ylim=c(0,maxY),axes=F, xlab="Scaffolds", ylab="Number of targeted regions", main="Anna")
+points(totalTargetPerScaffold[unique(anna.3$V1)],
+  pch=16, col="darkred", xlim=c(0,maxX), ylim=c(0,maxY))
+axis(2); axis(1)
+legend("topright",col=c("gray77","darkred"), pch=20, legend = c("Original dataset", "Reduced (Matched genes)"))
+plot(totalTargetPerScaffoldSwift,pch=16, col="darkblue", xlim=c(0,maxX), ylim=c(0,maxY),axes=F, xlab="Scaffolds", ylab="Number of targeted regions",main="Swift")
+axis(2); axis(1)
+```
+
+
+## Gene size distribution
+
+```{R, echo=F, fig.width=15}
+genesAnna=data.frame(genes=as.character(unique(anna.2$V9)))
+genesSplit=split(anna.2, anna.2$V9)
+genesAnna$Size=sapply(genesSplit,function(x){sum(x$V5-x$V4)})
+genesAnnaReduced=data.frame(genes=as.character(unique(anna.3$V9)),
+                            Size=genesAnna$Size[genesAnna$genes %in% unique(anna.3$V9)])
+
+genesSwift=data.frame(genes=as.character(unique(swift.4$V9)))
+genesSplit=split(swift.4, swift.4$V9)
+genesSwift$Size=sapply(genesSplit,function(x){sum(x$V5-x$V4)})
+d1=density(genesAnna$Size)
+d2=density(genesSwift$Size)
+d3=density(genesAnnaReduced$Size)
+plot(d1,type="l",col="gray77", lwd=3, main="Gene size distribution", xlab="Size (bp)")
+points(d3,type="l", col="darkred", lwd=3)
+points(d2,type="l", col="darkblue", lwd=3)
+legend("topright", col=c("gray77","darkred","darkblue"),legend=c("Anna - Original","Anna - Reduced","Swift"),  lwd=3)
+
+summaryDistroSize=rbind(
+  t(summary(genesAnna$Size)),
+  t(summary(genesAnnaReduced$Size)),
+  t(summary(genesSwift$Size))
+  )
+rownames(summaryDistroSize)=c("Anna - Original","Anna - Reduced","Swift")
+summaryDistroSize[1:3,]=prettyNum(summaryDistroSize[1:3,], big.mark=",")
+kable(summaryDistroSize, format="markdown")
+```
+
+## Targeted regions size distribution
+
+```{R echo=F, fig.width=12}
+d1=density(targets$Size)
+d2=density(targetsSwift$Size)
+d3=density(targets$Size[targets$Scaffold %in% unique(anna.3$V1)])
+plot(d1,type="l",col="gray77", lwd=3, main="Target size distribution", xlab="Size (bp)")
+points(d3,type="l", col="darkred", lwd=3)
+points(d2,type="l", col="darkblue", lwd=3)
+legend("topright", col=c("gray77","darkred","darkblue"),legend=c("Anna - Original","Anna - Reduced","Swift"),  lwd=3)
+summaryDistroSize=rbind(
+  t(summary(targets$Size)),
+  t(summary(targets$Size[targets$Scaffold %in% unique(anna.3$V1)])),
+  t(summary(targetsSwift$Size))
+  )
+rownames(summaryDistroSize)=c("Anna - Original","Anna - Reduced","Swift")
+summaryDistroSize[1:3,]=prettyNum(summaryDistroSize[1:3,], big.mark=",")
+kable(summaryDistroSize, format="markdown")
+```
+
+- These target size distribution are pretty much alike, but, there are some targeted regions up to ~5Kb. A question that can appear is whether these regions were expected (in terms of size).
+The idea with this experiment was to capture whole genes, and for this reason, theses sizes are not unexpected. Depth of coverage, which is what is being analyze here, depends more on
+probe feature decisions like size and density of the tiling.
+
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**SARA COMMENT**</h3>
+</div>
+<div class="panel-body">
+> '> 5kb' fragments? ok, "idea was to capture whole genes" but "targets" are CONTIGUOUS
+regions, right? pretty much like our loci, right? Were probes designed from
+fragments > 5kb? hard to believe...
+
+</div>
+<div class="panel-footer">
+- Target regions are not contiguous
+- But then again our loci (empirically speaking) are not contiguous
+</div>
+</div>
+
+# On-target coverage
+
+<div class="panel panel-info">
+<div class="panel-heading">
+<h3 class="panel-title">**NOTE**</h3>
+</div>
+<div class="panel-body">
+Target datasets used from now on will contain the same number of genes (1,469).
+</div>
+</div>
+
+I obtained the coverage of the targeted regions using **`bedtools`**[[9]](#bedtools) (v. 2.22.0), module `coverage`.
+With this, and the option `-hist` I can report a histogram of coverage for each feature in A as well as a summary
+histogram for `_all_` features in A. Output (tab delimited) after each feature in A (from [`bedtools` documentation](http://bedtools.readthedocs.io/en/latest/content/tools/coverage.html)))
+
+1. depth
+2. `#` bases at depth
+3. size of A
+4. % of A at depth
+
+
+```{bash, eval=F}
+for bamfile in $(find $HOME/anna/originals -name "*.bam"); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+  nohup bedtools coverage -hist -abam $bamfile -b "Calypte_anna.gene.CDS.2750.3.gff" | gzip > $HOME/anna/bedtools/cov/${tag}.cov.gz &
+done
+for bamfile in $(find $HOME/swift/originals -name "*.bam"); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+  nohup bedtools coverage -hist -abam $bamfile -b  "Chaetura_pelagica.CDS.2.gff" | gzip > $HOME/swift/bedtools/cov/${tag}.cov.gz &
+done
+```
+
+And so, I filtered the output to keep the coverage per region and the summary histogram separated.
+
+```{bash, eval=F}
+# (i.e)
+for tag in $(cat $HOME/anna/files/samples.txt  ); do
+  nohup zcat  $HOME/anna/bedtools/cov/H09.cov.gz | grep -v ^all | gzip >  $HOME/anna/bedtools/nohist/$tag.nohist.gz &
+  nohup zcat  $HOME/anna/bedtools/cov/H09.cov.gz | grep  ^all | gzip  >    $HOME/anna/bedtools/hist/$tag.hist.gz &
+done
+for tag in $(cat $HOME/swift/files/samples.txt | tail -n+2 | head -46 ); do
+  nohup zcat  $HOME/swift/bedtools/cov/H09.cov.gz | grep -v ^all | gzip >  $HOME/swift/bedtools/nohist/$tag.nohist.gz &
+  nohup zcat  $HOME/swift/bedtools/cov/H09.cov.gz | grep  ^all | gzip  >    $HOME/swift/bedtools/hist/$tag.hist.gz &
+done
+```
+
+## Breadth vs. depth
+
+With the information extracted from the `bedtools coverage -hist`, we can see the
+relation between the breadth of coverage obtained and the depth per sample. This
+gives the fraction of the captured genome against the coverage.
+
+
+| Map2 - target | Coverage per target overview |
+|---------------|------------------------------|
+| **map2Anna**  |  [![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/2.breadth.vs.coverage.1.all.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/anna/2.breadth.vs.coverage.1.all.png) |
+| **map2Swift**  |  [![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/2.breadth.vs.coverage.1.all.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/anna/2.breadth.vs.coverage.1.all.png) |
+
+*(Click image to enlarge)*
+
+**Zoom**: 0x-100x.
+
+| **map2Anna** | **map2Swift** |
+|-------------|---------------|
+| [![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/2.breadth.vs.coverage.2.zoom.500.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/anna/2.breadth.vs.coverage.2.zoom.500.png) | [![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/2.breadth.vs.coverage.2.zoom.500.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/swift/2.breadth.vs.coverage.2.zoom.500.png) |
+*(Click image to enlarge)*
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**SARA COMMENT**</h3>
+</div>
+<div class="panel-body">
+- On the depth vs breath... the zoom 0x-100x... is it OK? Is the scale the same? It does not look like...
+
+- Then its PER TARGET, but there are no targets > 5kb... excluded or w/ very very
+low depth of coverage (in a big portion of it)
+</div>
+
+<div class="panel-footer">
+- Don't understand the "then it is per target" part.
+- I'm adding links to bigger size plots, but, they do have the same x-axis range.
+- They represent the percentage of the total "targeted" regions. I guess I missed that in the explanation. So, taking into account a total of ~ 2.2 Mb.
+
+</div>
+</div>
+
+## Outlier calculations
+
+Outliers presented in this report were calculated using the following:
+
+```{R, eval=F}
+qnt <- quantile(data, probs=c(.25, .75))
+H <- 1.5 * IQR(data)
+y <- data
+y[data < (qnt[1] - H)] <- "Outlier"
+y[data > (qnt[2] + H)] <- "Outlier"
+```
+
+## Depth of coverage
+
+From the `bedtools coverage` output I was able to extract the depth of coverage per target, gene and sample.
+
+I generated 2  matrices:
+
+- Target depth: dimensions -- number of targets $\times$ number of samples
+- Gene depth: dimensions -- number of genes  $\times$  number of samples
+
+Each cell of the matrix correspond to the sum of the number of times each base was covered within the target or the gene.
+Then, coverage was calculated as the mean value of all the depth of coverage of all the samples for a specific target/gene divided by the size of the corresponding target/gene.
+
+For the depth of coverage for the samples, I summed the coverage of all targets and divided it by the total amount of bases that were targeted.
+
+<div class="panel panel-info">
+<div class="panel-heading">
+<h3 class="panel-title">Related to the language</h3>
+</div>
+<div class="panel-body">
+Everything is just average depth of coverage  (individual/gene and target)
+</div>
+</div>
+
+
+
+### Coverage per sample
+
+#### Depth per sample
+
+```{R, echo=F, fig.width=12,fig.height=8}
+coveragePerSampleAnna=unlist(read.table("/media/merly/Baymax/research/cph-visit/coverage-analysis/anna/files2/coverage.per.sample.txt", stringsAsFactors=F, colClasses=c("character","numeric")))
+coveragePerSampleSwift=unlist(read.table("/media/merly/Baymax/research/cph-visit/coverage-analysis/swift/files2/coverage.per.sample.txt", stringsAsFactors=F, colClasses=c("character","numeric")))
+sampleNamesAnna=unlist(read.table("/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/samples.txt", stringsAsFactors = F))
+sampleNamesSwift=unlist(read.table("/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/samples.txt", stringsAsFactors = F))
+names(coveragePerSampleAnna)=sampleNamesAnna
+names(coveragePerSampleSwift)=sampleNamesSwift
+################################################################################
+# ANNA
+qntAnna <- quantile(coveragePerSampleAnna, probs=c(.25, .75))
+HAnna <- 1.5 * IQR(coveragePerSampleAnna)
+y <- rep("black",length(coveragePerSampleAnna))
+y[coveragePerSampleAnna < (qntAnna[1] - HAnna)] <- "red"
+y[coveragePerSampleAnna > (qntAnna[2] + HAnna)] <- "red"
+# samples close to ingroup ref: h1, h5,22,30
+closeToRefIngroup=c("H1","H5","H22","H30")
+closeToRefIngroupIndices=c(which(sampleNamesAnna==closeToRefIngroup[1]),which(sampleNamesAnna==closeToRefIngroup[2]),
+                           which(sampleNamesAnna==closeToRefIngroup[3]),which(sampleNamesAnna==closeToRefIngroup[4]))
+pchList=rep(20, length(sampleNamesAnna))
+pchList[closeToRefIngroupIndices]=17
+#-------------------------------------------------------------------------------
+maxY=roundUpNice(max(coveragePerSampleAnna,coveragePerSampleSwift))
+layout(matrix(c(1,2),1,2))
+plot(1:length(sampleNamesAnna),coveragePerSampleAnna,axes=F, ylim=c(0,maxY),
+  xlab="Samples",ylab="Depth of coverage", pch=pchList, col=y, main="Map2Aan")
+
+abline(h=qntAnna[1], col="darkblue", lty="dashed", lwd=2)
+abline(h=qntAnna[2], col="darkblue", lty="dashed", lwd=2)
+abline(h=median(coveragePerSampleAnna), col="darkblue", lwd=2)
+axis(2,at=seq(0,300, 25),las=2,cex.axis=0.6)
+axis(1, at=1:length(sampleNamesAnna), las=2,labels=sampleNamesAnna,cex.axis=0.8)
+text(labels = "median",x = 48,y = median(coveragePerSampleAnna)+5, cex=0.5)
+text(labels = "Q.25",x = 48,y = qntAnna[1]+5, cex=0.5)
+text(labels = "Q.75",x = 48,y = qntAnna[2]+5, cex=0.5)
+################################################################################
+# swift
+qntSwift <- quantile(coveragePerSampleSwift, probs=c(.25, .75))
+HSwift <- 1.5 * IQR(coveragePerSampleSwift)
+y <- rep("black",length(coveragePerSampleSwift))
+y[coveragePerSampleSwift < (qntSwift[1] - HSwift)] <- "red"
+y[coveragePerSampleSwift > (qntSwift[2] + HSwift)] <- "red"
+closeToRefIngroupIndices=c(which(sampleNamesSwift==closeToRefIngroup[1]),which(sampleNamesSwift==closeToRefIngroup[2]),
+                           which(sampleNamesSwift==closeToRefIngroup[3]),which(sampleNamesSwift==closeToRefIngroup[4]))
+pchList=rep(20, length(sampleNamesSwift))
+pchList[closeToRefIngroupIndices]=17
+#-------------------------------------------------------------------------------
+plot(1:length(sampleNamesSwift),coveragePerSampleSwift,axes=F,ylim=c(0,maxY),
+  xlab="Samples",ylab="", pch=pchList, col=y, main="Map2Swift")
+abline(h=qntSwift[1], col="darkblue", lty="dashed", lwd=2)
+abline(h=qntSwift[2], col="darkblue", lty="dashed", lwd=2)
+abline(h=median(coveragePerSampleSwift), col="darkblue", lwd=2)
+axis(2,at=seq(0,300, 25),las=2,cex.axis=0.6)
+axis(1, at=1:length(sampleNamesSwift), las=2,labels=sampleNamesSwift,cex.axis=0.8)
+text(labels = "median",x = 48,y = median(coveragePerSampleSwift)+5, cex=0.5)
+text(labels = "Q.25",x = 48,y = qntSwift[1]+5, cex=0.5)
+text(labels = "Q.75",x = 48,y = qntSwift[2]+5, cex=0.5)
+
+legend("topright", legend = c("Outlier",  "Outlier close to ingroup ref", "Not-outlier","Not-outlier close to ingroup ref"),
+       col=c(rep("red",2),rep("black",2)),
+       pch=c(20,17,20,17))
+```
+
+#### Coverage distribution per sample
+
+```{R, echo=F, fig.width=12, fig.height=8}
+coveragePerSampleAnnaNO=coveragePerSampleAnna
+coveragePerSampleAnnaNO[ coveragePerSampleAnna < (qntAnna[1] - HAnna)]=NA
+coveragePerSampleAnnaNO[coveragePerSampleAnna > (qntAnna[2] + HAnna)]=NA
+coveragePerSampleAnnaNO=coveragePerSampleAnnaNO[!is.na(coveragePerSampleAnnaNO)]
+
+coveragePerSampleSwiftNO=coveragePerSampleSwift
+coveragePerSampleSwiftNO[ coveragePerSampleSwift < (qntSwift[1] - HSwift)]=NA
+coveragePerSampleSwiftNO[coveragePerSampleSwift > (qntSwift[2] + HSwift)]=NA
+coveragePerSampleSwiftNO=coveragePerSampleSwiftNO[!is.na(coveragePerSampleSwiftNO)]
+
+d1Anna=density(coveragePerSampleAnna)
+d1Swift=density(coveragePerSampleSwift)
+maxY1=roundUpNice(max(d1Anna$y,d1Swift$y))
+
+d2Anna=density(coveragePerSampleAnnaNO)
+d2Swift=density(coveragePerSampleSwiftNO)
+maxY2=roundUpNice(max(d2Anna$y,d2Swift$y))
+
+layout(matrix(c(1,2),1,2))
+plot(d1Anna, type="l", col="darkred", lwd=2, ylim=c(0,maxY1), main="All samples", xlab="Depth of coverage")
+points(d1Swift, type="l", col="darkblue", lwd=2)
+abline(v=c(mean(coveragePerSampleAnna),mean(coveragePerSampleSwift)), col=c("darkred","darkblue"), lty="dashed",lwd=2)
+legend("topright",legend=c("Map2Anna","Map2Anna - mean coverage","Map2Swift", "Map2Swift - mean coverage"),
+  col=c("darkred","darkred","darkblue","darkblue"),lty=c("solid","dashed","solid","dashed"),lwd=2)
+
+plot(d2Anna, type="l", col="darkred", lwd=2, ylim=c(0,maxY2), main="Without outliers", xlab="Depth of coverage")
+points(d2Swift, type="l", col="darkblue", lwd=2)
+abline(v=c(mean(coveragePerSampleAnnaNO),mean(coveragePerSampleSwiftNO)), col=c("darkred","darkblue"), lty="dashed",lwd=2)
+legend("topright",legend=c("Map2Anna","Map2Anna - mean coverage","Map2Swift", "Map2Swift - mean coverage"),
+  col=c("darkred","darkred","darkblue","darkblue"),lty=c("solid","dashed","solid","dashed"),lwd=2)
+
+summaryCoveragePerSample=rbind(
+  t(summary(coveragePerSampleAnna)),
+  t(summary(coveragePerSampleSwift)),
+  t(summary(coveragePerSampleAnnaNO)),
+  t(summary(coveragePerSampleSwiftNO))
+)
+summaryCoveragePerSample=data.frame(summaryCoveragePerSample)
+summaryCoveragePerSample$Var=c(
+  var(coveragePerSampleAnna),
+  var(coveragePerSampleSwift),
+  var(coveragePerSampleAnnaNO),
+  var(coveragePerSampleSwiftNO)
+  )
+summaryCoveragePerSample$Std.Dev=c(
+  sd(coveragePerSampleAnna),
+  sd(coveragePerSampleSwift),
+  sd(coveragePerSampleAnnaNO),
+  sd(coveragePerSampleSwiftNO)
+)
+summaryCoveragePerSample=rbind(
+  prettyNum(summaryCoveragePerSample[1,], big.mark=","),
+  prettyNum(summaryCoveragePerSample[2,], big.mark=","),
+  prettyNum(summaryCoveragePerSample[3,], big.mark=","),
+  prettyNum(summaryCoveragePerSample[4,], big.mark=",")
+  )
+colnames(summaryCoveragePerSample)=c("Min.","1st. Qu.","Median", "Mean","3rd. Qu","Max.","Var.","Std. Dev")
+rownames(summaryCoveragePerSample)=c("map2Anna","map2Swift","map2Anna without outliers","map2Swift  without outliers")
+kable(summaryCoveragePerSample, format="markdown")
+```
+
+
+### Coverage per gene
+
+```{R, echo=F, fig.width=12, fig.height=6}
+coveragePerGeneAnna=unlist(read.table(
+  "/media/merly/Baymax/research/cph-visit/coverage-analysis/anna/files2/coverage.per.gene.txt",
+  stringsAsFactors=F,
+  colClasses=c("character","numeric")))
+coveragePerGeneSwift=unlist(read.table(
+  "/media/merly/Baymax/research/cph-visit/coverage-analysis/swift/files2/coverage.per.gene.txt",
+  stringsAsFactors=F,
+  colClasses=c("character","numeric")))
+names(coveragePerGeneAnna)=unique(anna.3$V9)
+names(coveragePerGeneSwift)=unique(swift.4$V9)
+################################################################################
+# ANNA
+qnt <- quantile(coveragePerGeneAnna, probs=c(.25, .75))
+H <- 1.5 * IQR(coveragePerGeneAnna)
+y <- rep("black",length(coveragePerGeneAnna))
+y[coveragePerGeneAnna < (qnt[1] - H)] <- "red"
+y[coveragePerGeneAnna > (qnt[2] + H)] <- "red"
+#-------------------------------------------------------------------------------
+maxY=max(coveragePerGeneAnna,coveragePerGeneSwift)
+layout(matrix(c(1,2),1,2))
+plot(coveragePerGeneAnna,axes=F, ylim=c(0,maxY),
+  xlab="Genes",ylab="Depth of coverage", pch=20, col=y, main="Map2Aan")
+abline(h=qnt[1], col="darkblue", lty="dashed", lwd=2)
+abline(h=qnt[2], col="darkblue", lty="dashed", lwd=2)
+abline(h=mean(coveragePerGeneAnna), col="darkblue", lwd=2)
+axis(2,las=2, cex.axis=0.6)
+axis(1, at=seq(0,3000,250), labels=seq(0,3000,250),las=2,cex.axis=0.5)
+################################################################################
+# swift
+qnt <- quantile(coveragePerGeneSwift, probs=c(.25, .75))
+H <- 1.5 * IQR(coveragePerGeneSwift)
+y <- rep("black",length(coveragePerGeneSwift))
+y[coveragePerGeneSwift < (qnt[1] - H)] <- "red"
+y[coveragePerGeneSwift > (qnt[2] + H)] <- "red"
+#-------------------------------------------------------------------------------
+plot(coveragePerGeneSwift,axes=F,ylim=c(0,maxY),
+  xlab="Genes",ylab="Depth of coverage", pch=pchList, col=y, main="Map2Swift")
+abline(h=qnt[1], col="darkblue", lty="dashed", lwd=2)
+abline(h=qnt[2], col="darkblue", lty="dashed", lwd=2)
+abline(h=mean(coveragePerGeneSwift), col="darkblue", lwd=2)
+axis(2, las=2, cex.axis=0.6)
+axis(1, at=seq(0,3000,250), labels=seq(0,3000,250),las=2,cex.axis=0.5)
+
+legend("topright", legend = c("Outlier", "Not-outlier"),
+       col=c("red","black"),
+       pch=20)
+
+summaryCoveragePerGene=rbind(
+ t(summary(coveragePerGeneAnna)),
+ t(summary(coveragePerGeneSwift)))
+summaryCoveragePerGene=data.frame(summaryCoveragePerGene)
+summaryCoveragePerGene$Var=c(
+  var(coveragePerGeneAnna),
+  var(coveragePerGeneSwift)
+  )
+summaryCoveragePerGene$Std.Dev=c(
+  sd(coveragePerGeneAnna),
+  sd(coveragePerGeneSwift)
+  )
+summaryCoveragePerGene=rbind(
+  prettyNum(summaryCoveragePerGene[1,], big.mark=","),
+  prettyNum(summaryCoveragePerGene[2,], big.mark=",")
+)
+
+colnames(summaryCoveragePerGene)=c("Min.","1st. Qu.","Median", "Mean","3rd. Qu","Max.","Var.","Std. Dev")
+rownames(summaryCoveragePerGene)=c("map2Anna","map2Swift")
+
+kable(summaryCoveragePerGene, format="markdown")
+```
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">Outlier check - map2Anna</h3>
+</div>
+<div class="panel-body">
+- Identification and removal of the outliers
+```{R, echo=F}
+# Get the outliers
+qntAnna <- quantile(coveragePerGeneAnna, probs=c(.25, .75))
+HAnna <- 1.5 * IQR(coveragePerGeneAnna)
+y <- rep("black",length(coveragePerGeneAnna))
+outliersAnna=coveragePerGeneAnna
+outliersAnna[coveragePerGeneAnna < (qntAnna[1] - HAnna)] <- -1
+outliersAnna[coveragePerGeneAnna > (qntAnna[2] + HAnna)] <- -1
+outliersAnna[outliersAnna>=0]=0
+outliersAnna[outliersAnna<0]=1
+numOutliersAnna=sum(outliersAnna)
+indexOutliers=which(outliersAnna>0)
+geneAnnaOutliers=genesAnna[indexOutliers,]
+colnames(geneAnnaOutliers)=c("Gene","Size")
+
+qntSwift <- quantile(coveragePerGeneSwift, probs=c(.25, .75))
+HSwift <- 1.5 * IQR(coveragePerGeneSwift)
+y <- rep("black",length(coveragePerGeneSwift))
+outliersSwift=coveragePerGeneSwift
+outliersSwift[coveragePerGeneSwift < (qntSwift[1] - HSwift)] <- -1
+outliersSwift[coveragePerGeneSwift > (qntSwift[2] + HSwift)] <- -1
+outliersSwift[outliersSwift>=0]=0
+outliersSwift[outliersSwift<0]=1
+numOutliersSwift=sum(outliersSwift)
+indexOutliers=which(outliersSwift>0)
+geneSwiftOutliers=genesSwift[indexOutliers,]
+colnames(geneSwiftOutliers)=c("Gene","Size")
+geneAnnaOutliers$Gene=as.character(geneAnnaOutliers$Gene)
+geneSwiftOutliers$Gene=as.character(geneSwiftOutliers$Gene)
+
+```
+
+- Details of the gene with extremely high coverage.
+    - First, there is a table with the details of the gene, specific targets (exon regions, size and coverage)
+    - IGV Capture of the region, where it is possible to see several peaks, more that the number of targets for this region, with high coverage.
+    - There is also a zoomed region, belonging to the `scaffold116`, positions `5,306,081`-`5,306,303`. **`A`** Shows the coverage distribution, as plotted by IGV.
+    While, **`B`**, shows the bottom of the region coverage peak,  and the corresponding nucleotide sequence.
+    - It might be possible that this is a repetitive element, and so, the reason why it has so high coverage.
+
+```{R}
+extHighCoverageGene=coveragePerGeneSwift[outliersSwift>0]
+extHighCoverageGene=extHighCoverageGene[extHighCoverageGene>300]
+# Cpe_R001479
+
+swiftSplitGene=split(swift.4,swift.4$V9)
+dd=swiftSplitGene[names(extHighCoverageGene)][[1]]
+dd$Size=dd$V5-dd$V4
+dd=dd[c(1,4,5,9,11)]
+colnames(dd)=c("Scaffold","Start", "End","Gene name","Size")
+kable(dd, format="markdown", row.names = F)
+```
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/igv_snapshot-scaffold116-5296564-5316420.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical/general/igv_snapshot-scaffold116-5296564-5316420.png)
+*(Click image to enlarge)*
+
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+[![***(A) IGV `scaffold116`, positions `5,306,081`-`5,306,303` Top Coverage distribution***](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/igv_snapshot-scaffold116-5296564-5316420-zoom-middle-peak-top.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical/general/igv_snapshot-scaffold116-5296564-5316420.png)
+*(Click image to enlarge)*
+</div></div>
+
+<div class="col-lg-6">
+<div class="bs-component">
+[![***(B) IGV `scaffold116`, positions `5,306,081`-`5,306,303` Bottom sequence***](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/igv_snapshot-scaffold116-5296564-5316420-zoom-middle-peak.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical/general/igv_snapshot-scaffold116-5296564-5316420-zoom-middle-peak.png)
+*(Click image to enlarge)*
+</div></div></div>
+
+
+
+- Number of outliers genes and coverage distribution
+
+```{R, echo=F}
+outliersDF=t(data.frame(
+  anna=c(numOutliersAnna,summary(coveragePerGeneAnna[outliersAnna>0])),
+  swift=c(numOutliersSwift, summary(coveragePerGeneSwift[outliersSwift>0]))
+  ))
+colnames(outliersDF)=c("Num. outliers", "Min.","1st. Qu.","Median","Mean","3rd. Qu.","Max.")
+rownames(outliersDF)=c("map2Anna", "map2Swift")
+kable(outliersDF, format="markdown")
+
+```
+
+- Outlier genes and corresponding size
+
+```{R, echo=F}
+geneOutliers=data.frame(cbind(geneAnnaOutliers,rbind(geneSwiftOutliers,c("",""),c("",""))))
+colnames(geneOutliers)=c("map2Anna Gene","map2Anna Size","map2Swift Gene","map2Size Gene")
+kable(geneOutliers, format="markdown",row.names = F)
+
+annaOutInBirds=birds.6[birds.6$anna %in% geneAnnaOutliers$Gene, ]
+intersectedGenes=intersect(geneSwiftOutliers$Gene, annaOutInBirds$swift)
+```
+
+- There is no correspondence of gene outliers across datasets:
+    - knownOrthologs[geneOutliersInAnna] $\cap$ geneOutliersInSwift $=$ $\emptyset$
+
+</div>
+</div>
+
+#### Depth of coverage distribution per gene after removing outliers
+
+
+
+```{R, echo=F,fig.width=12, fig.height=8}
+coveragePerGeneAnnaFiltered=coveragePerGeneAnna[! names(coveragePerGeneAnna) %in% geneAnnaOutliers$Gene]
+coveragePerGeneSwiftFiltered=coveragePerGeneSwift[! names(coveragePerGeneSwift) %in% geneSwiftOutliers$Gene]
+maxY=roundUpNice(max(coveragePerGeneAnnaFiltered,coveragePerGeneSwiftFiltered))
+layout(matrix(c(1,2),1,2))
+coveragePerGeneAnnaNO=coveragePerGeneAnna
+coveragePerGeneAnnaNO[coveragePerGeneAnna < (qntAnna[1] - HAnna)]=NA
+coveragePerGeneAnnaNO[coveragePerGeneAnna > (qntAnna[2] + HAnna)]=NA
+coveragePerGeneAnnaNO=coveragePerGeneAnnaNO[!is.na(coveragePerGeneAnnaNO)]
+
+coveragePerGeneSwiftNO=coveragePerGeneSwift
+coveragePerGeneSwiftNO[coveragePerGeneSwift < (qntSwift[1] - HSwift)]=NA
+coveragePerGeneSwiftNO[coveragePerGeneSwift > (qntSwift[2] + HSwift)]=NA
+coveragePerGeneSwiftNO=coveragePerGeneSwiftNO[!is.na(coveragePerGeneSwiftNO)]
+
+d1Anna=density(coveragePerGeneAnna)
+d1Swift=density(coveragePerGeneSwift)
+maxY1=roundUpNice(max(d1Anna$y,d1Swift$y))
+
+d2Anna=density(coveragePerGeneAnnaNO)
+d2Swift=density(coveragePerGeneSwiftNO)
+maxY2=roundUpNice(max(d2Anna$y,d2Swift$y))
+
+layout(matrix(c(1,2),1,2))
+plot(d1Anna, type="l", col="darkred", lwd=2, ylim=c(0,maxY1), main="All samples", xlab="Depth of coverage")
+points(d1Swift, type="l", col="darkblue", lwd=2)
+abline(v=c(mean(coveragePerGeneAnna),mean(coveragePerGeneSwift)), col=c("darkred","darkblue"), lty="dashed",lwd=2)
+legend("topright",legend=c("Map2Anna","Map2Anna - mean coverage","Map2Swift", "Map2Swift - mean coverage"),
+  col=c("darkred","darkred","darkblue","darkblue"),lty=c("solid","dashed","solid","dashed"),lwd=2)
+
+plot(d2Anna, type="l", col="darkred", lwd=2, ylim=c(0,maxY2), main="Without outliers", xlab="Depth of coverage")
+points(d2Swift, type="l", col="darkblue", lwd=2)
+abline(v=c(mean(coveragePerGeneAnnaNO),mean(coveragePerGeneSwiftNO)), col=c("darkred","darkblue"), lty="dashed",lwd=2)
+legend("topright",legend=c("Map2Anna","Map2Anna - mean coverage","Map2Swift", "Map2Swift - mean coverage"),
+  col=c("darkred","darkred","darkblue","darkblue"),lty=c("solid","dashed","solid","dashed"),lwd=2)
+
+summaryCoveragePerGene=rbind(
+ t(summary(coveragePerGeneAnnaFiltered)),
+ t(summary(coveragePerGeneSwiftFiltered)))
+summaryCoveragePerGene=data.frame(summaryCoveragePerGene)
+summaryCoveragePerGene$Var=c(
+  var(coveragePerGeneAnnaFiltered),
+  var(coveragePerGeneSwiftFiltered)
+  )
+summaryCoveragePerGene$Std.Dev=c(
+  sd(coveragePerGeneAnnaFiltered),
+  sd(coveragePerGeneSwiftFiltered)
+  )
+summaryCoveragePerGene=rbind(
+  prettyNum(summaryCoveragePerGene[1,], big.mark=","),
+  prettyNum(summaryCoveragePerGene[2,], big.mark=",")
+)
+colnames(summaryCoveragePerGene)=c("Min.","1st. Qu.","Median", "Mean","3rd. Qu","Max.","Var.","Std. Dev")
+rownames(summaryCoveragePerGene)=c("map2Anna without outliers","map2Swift without outliers")
+
+kable(summaryCoveragePerGene, format="markdown")
+```
+
+#### Gene size vs. depth of coverage
+<!-- http://blog.yhat.com/posts/r-lm-summary.html -->
+<!-- http://data.princeton.edu/R/linearModels.html -->
+<!-- http://feliperego.github.io/blog/2015/10/23/Interpreting-Model-Output-In-R -->
+
+I'm looking for a relation between gene size and depth of coverage. So I fit a linear model to the data.
+
+```{R, echo=F, fig.width=12,fig.height=6}
+genesAnnaFiltered=genesAnna[which(genesAnna$genes %in% intersect(names(coveragePerGeneAnnaFiltered),genesAnna$genes)),]
+genesSwiftFiltered=genesSwift[which(genesSwift$genes %in% intersect(names(coveragePerGeneSwiftFiltered),genesSwift$genes)),]
+rownames(genesAnnaFiltered)=genesAnnaFiltered$genes
+rownames(genesSwiftFiltered)=genesSwiftFiltered$genes
+lmdAnna=lm(coveragePerGeneAnnaFiltered~genesAnnaFiltered$Size)
+lmdSwift=lm(coveragePerGeneSwiftFiltered~genesSwiftFiltered$Size)
+
+layout(matrix(c(1,2),1,2))
+plot(genesAnnaFiltered$Size,coveragePerGeneAnnaFiltered, pch=20,
+   xlab="Gene size",ylab="Depth of coverage",axes=F, main="map2Anna")
+abline(lmdAnna, col="red",lwd=2)
+axis(1);axis(2)
+plot(genesSwiftFiltered$Size,coveragePerGeneSwiftFiltered, pch=20,
+   xlab="Gene size",ylab="Depth of coverage",axes=F, main="map2Swift")
+abline(lmdSwift, col="red",lwd=2)
+axis(1);axis(2)
+```
+
+
+<ul class="nav nav-tabs">
+<li class="active"><a href="#lmdanna" data-toggle="tab">map2Anna summary(lmd)</a></li>
+<li><a href="#lmdswift" data-toggle="tab">map2Swift summary(lmd)</a></li>
+</ul>
+<div id="myTabContent" class="tab-content">
+<div class="tab-pane fade active in" id="lmdanna">
+<div class="panel panel-warning">
+<div class="panel-heading">Results from the `lm()` function that need to be discussed</div>
+<div class="panel-body">
+```{R, echo=F, fig.width=10,fig.height=8}
+summary(lmdAnna)
+layout(matrix(c(1,2,3,4), 2,2, byrow=T))
+plot(lmdAnna, pch=16)
+```
+</div>
+</div>
+</div>
+<div class="tab-pane fade" id="lmdswift">
+<div class="panel panel-warning">
+<div class="panel-heading">Results from the `lm()` function that need to be discussed</div>
+<div class="panel-body">
+```{R, echo=F,fig.width=10,fig.height=8}
+summary(lmdSwift)
+layout(matrix(c(1,2,3,4), 2,2, byrow=T))
+plot(lmdSwift, pch=16)
+```
+</div>
+</div>
+</div>
+</div> <!-- end div -->
+
+
+
+### Coverage per target
+
+```{R, echo=F, fig.width=10, fig.height=6}
+coveragePerTargetAnna=unlist(read.table("/media/merly/Baymax/research/cph-visit/coverage-analysis/anna/files2/coverage.per.target.txt", stringsAsFactors=F, colClasses=c("character","numeric")))
+coveragePerTargetSwift=unlist(read.table("/media/merly/Baymax/research/cph-visit/coverage-analysis/swift/files2/coverage.per.target.txt", stringsAsFactors=F, colClasses=c("character","numeric")))
+names(coveragePerTargetAnna)=rownames(reducedTargets)
+names(coveragePerTargetSwift)=rownames(targetsSwift)
+
+#filter by genes resulted out removing outliers
+# genesAnnaFiltered
+# genesSwiftFiltered
+
+anna.4=anna.3[anna.3$V9 %in% genesAnnaFiltered$genes,]
+swift.5=swift.4[swift.4$V9 %in% genesSwiftFiltered$genes,]
+anna.4$targetname=paste0(
+    anna.4$V1,rep("-",nrow(anna.4)),
+    anna.4$V4,rep("-",nrow(anna.4)),
+    anna.4$V5)
+anna.4$Size=anna.4$V5-anna.4$V4
+swift.5$targetname=paste0(
+    swift.5$V1,rep("-",nrow(swift.5)),
+    swift.5$V4,rep("-",nrow(swift.5)),
+    swift.5$V5)
+swift.5$Size=swift.5$V5-swift.5$V4
+
+anna.4$Coverage=coveragePerTargetAnna[intersect(names(coveragePerTargetAnna),anna.4$targetname)]
+swift.5$Coverage=coveragePerTargetSwift[intersect(names(coveragePerTargetSwift),swift.5$targetname)]
+
+
+################################################################################
+# ANNA
+qnt <- quantile(anna.4$Coverage, probs=c(.25, .75))
+H <- 1.5 * IQR(anna.4$Coverage)
+y <- rep("black",length(anna.4$Coverage))
+y[anna.4$Coverage < (qnt[1] - H)] <- "red"
+y[anna.4$Coverage > (qnt[2] + H)] <- "red"
+#-------------------------------------------------------------------------------
+maxY=max(anna.4$Coverage,swift.5$Coverage)
+layout(matrix(c(1,2),1,2))
+plot(anna.4$Coverage,axes=F, ylim=c(0,maxY),
+  xlab="Genes",ylab="Depth of coverage", pch=20, col=y, main="Map2Aan")
+abline(h=qnt[1], col="red", lty="dashed", lwd=2)
+abline(h=qnt[2], col="red", lty="dashed", lwd=2)
+abline(h=median(anna.4$Coverage), col="red", lwd=2)
+axis(2,las=2, cex.axis=0.6)
+axis(1, las=2,cex.axis=0.5)
+################################################################################
+# swift
+qnt <- quantile(swift.5$Coverage, probs=c(.25, .75))
+H <- 1.5 * IQR(swift.5$Coverage)
+y <- rep("black",length(swift.5$Coverage))
+y[swift.5$Coverage < (qnt[1] - H)] <- "red"
+y[swift.5$Coverage > (qnt[2] + H)] <- "red"
+#-------------------------------------------------------------------------------
+plot(swift.5$Coverage,axes=F,ylim=c(0,maxY),
+  xlab="Genes",ylab="Depth of coverage", pch=20, col=y, main="Map2Swift")
+abline(h=qnt[1], col="red", lty="dashed", lwd=2)
+abline(h=qnt[2], col="red", lty="dashed", lwd=2)
+abline(h=median(swift.5$Coverage), col="red", lwd=2)
+axis(2, las=2, cex.axis=0.6)
+axis(1, las=2,cex.axis=0.5)
+
+legend("topright", legend = c("Outlier", "Not-outlier"),
+       col=c("red","black"),
+       pch=20)
+
+summarycoveragePerTarget=rbind(
+  t(summary(anna.4$Coverage)),
+  t(summary(swift.5$Coverage))
+)
+rownames(summarycoveragePerTarget)=c("map2Anna","map2Swift")
+summarycoveragePerTarget[1:2,]=prettyNum(summarycoveragePerTarget[1:2,], big.mark=",")
+kable(summarycoveragePerTarget, format="markdown")
+```
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**Outliers check**</h3>
+</div>
+<div class="panel-body">
+```{R, echo=F}
+qntAnna <- quantile(anna.4$Coverage, probs=c(.25, .75))
+HAna <- 1.5 * IQR(anna.4$Coverage)
+outliersTargetsAnna <- anna.4$Coverage
+outliersTargetsAnna[anna.4$Coverage < (qntAnna[1] - HAna)] <- -1
+outliersTargetsAnna[anna.4$Coverage > (qntAnna[2] + HAna)] <- -1
+outliersTargetsAnna[outliersTargetsAnna>=0]=0
+outliersTargetsAnna[outliersTargetsAnna<0]=1
+numTargetsOutliersAnna=sum(outliersTargetsAnna)
+indexOutliers=which(outliersTargetsAnna>0)
+targetsOutliersAnna=data.frame(
+  Target=anna.4$targetname[indexOutliers],
+  Coverage=anna.4$Coverage[indexOutliers],
+  Size=anna.4$Size[indexOutliers]
+)
+anna.5=anna.4[!(anna.4$targetname %in% targetsOutliersAnna$Target),]
+
+# swift
+qntSwift <- quantile(swift.5$Coverage, probs=c(.25, .75))
+HSwift <- 1.5 * IQR(swift.5$Coverage)
+outliersTargetsSwift <- swift.5$Coverage
+outliersTargetsSwift[swift.5$Coverage < (qntSwift[1] - HSwift)] <- -1
+outliersTargetsSwift[swift.5$Coverage > (qntSwift[2] + HSwift)] <- -1
+outliersTargetsSwift[outliersTargetsSwift>=0]=0
+outliersTargetsSwift[outliersTargetsSwift<0]=1
+numTargetsOutliersSwift=sum(outliersTargetsSwift)
+indexOutliers=which(outliersTargetsSwift>0)
+targetsOutliersSwift=data.frame(
+  Target=swift.5$targetname[indexOutliers],
+  Coverage=swift.5$Coverage[indexOutliers],
+  Size=swift.5$Size[indexOutliers]
+)
+swift.6=swift.5[!(swift.5$targetname %in% targetsOutliersSwift$Target),]
+```
+
+- After the identification and removal of the outliers, this is number of target outliers and their coverage distribution
+
+```{R, echo=F}
+outliersDF=t(data.frame(
+  anna=c(numTargetsOutliersAnna,summary(anna.5$Coverage)),
+  swift=c(numTargetsOutliersSwift, summary(swift.6$Coverage))
+  ))
+
+colnames(outliersDF)=c("Num. outliers", "Min.","1st. Qu.","Median","Mean","3rd. Qu.","Max.")
+rownames(outliersDF)=c("map2Anna", "map2Swift")
+outliersDF[1:2,]=prettyNum(outliersDF[1:2,],big.mark=",")
+kable(outliersDF, format="markdown")
+```
+
+</div>
+</div>
+
+
+
+#### Depth of coverage distribution per target after removing coverage outliers
+
+```{R, echo=F,fig.width=12, fig.height=8}
+d1Anna=density(anna.4$Coverage)
+d1Swift=density(swift.5$Coverage)
+maxY1=roundUpNice(max(d1Anna$y,d1Swift$y))
+
+d2Anna=density(anna.5$Coverage)
+d2Swift=density(swift.6$Coverage)
+maxY2=roundUpNice(max(d2Anna$y,d2Swift$y))
+
+layout(matrix(c(1,2),1,2))
+plot(d1Anna, type="l", col="darkred", lwd=2, ylim=c(0,maxY1), main="All samples", xlab="Depth of coverage")
+points(d1Swift, type="l", col="darkblue", lwd=2)
+abline(v=c(mean(anna.4$Coverage),mean(swift.5$Coverage)), col=c("darkred","darkblue"), lty="dashed",lwd=2)
+legend("topright",legend=c("Map2Anna","Map2Anna - mean coverage","Map2Swift", "Map2Swift - mean coverage"),
+  col=c("darkred","darkred","darkblue","darkblue"),lty=c("solid","dashed","solid","dashed"),lwd=2)
+
+plot(d2Anna, type="l", col="darkred", lwd=2, ylim=c(0,maxY2), main="Without outliers", xlab="Depth of coverage")
+points(d2Swift, type="l", col="darkblue", lwd=2)
+abline(v=c(mean(anna.5$Coverage),mean(swift.6$Coverage)), col=c("darkred","darkblue"), lty="dashed",lwd=2)
+legend("topright",legend=c("Map2Anna","Map2Anna - mean coverage","Map2Swift", "Map2Swift - mean coverage"),
+  col=c("darkred","darkred","darkblue","darkblue"),lty=c("solid","dashed","solid","dashed"),lwd=2)
+
+```
+
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**Size outliers removal**</h3>
+</div>
+<div class="panel-body">
+
+```{R, echo=F, fig.width=12}
+qntAnna <- quantile(anna.5$Size, probs=c(.25, .75))
+H <- 1.5 * IQR(anna.5$Size)
+outliersTargetsAnna <- anna.5$Size
+outliersTargetsAnna[anna.5$Size < (qntAnna[1] - H)] <- -1
+outliersTargetsAnna[anna.5$Size > (qntAnna[2] + H)] <- -1
+outliersTargetsAnna[outliersTargetsAnna>=0]=0
+outliersTargetsAnna[outliersTargetsAnna<0]=1
+numTargetsOutliersAnna=sum(outliersTargetsAnna)
+indexOutliers=which(outliersTargetsAnna>0)
+targetsOutliersAnna=data.frame(
+  Target=anna.5$targetname[indexOutliers],
+  Coverage=anna.5$Coverage[indexOutliers],
+  Size=anna.5$Size[indexOutliers]
+)
+anna.6=anna.5[!(anna.5$targetname %in% targetsOutliersAnna$Target),]
+
+# swift
+qntSwift <- quantile(swift.6$Size, probs=c(.25, .75))
+H <- 1.5 * IQR(swift.6$Size)
+outliersTargetsSwift <- swift.6$Size
+outliersTargetsSwift[swift.6$Size < (qntSwift[1] - H)] <- -1
+outliersTargetsSwift[swift.6$Size > (qntSwift[2] + H)] <- -1
+outliersTargetsSwift[outliersTargetsSwift>=0]=0
+outliersTargetsSwift[outliersTargetsSwift<0]=1
+numTargetsOutliersSwift=sum(outliersTargetsSwift)
+indexOutliers=which(outliersTargetsSwift>0)
+targetsOutliersSwift=data.frame(
+  Target=swift.6$targetname[indexOutliers],
+  Coverage=swift.6$Coverage[indexOutliers],
+  Size=swift.6$Size[indexOutliers]
+)
+swift.7=swift.6[!(swift.6$targetname %in% targetsOutliersSwift$Target),]
+```
+
+- **Target size distribution**: Target size distribution has not change since the beginning of the analysis, current size distribution can be shown [here](#targeted-regions-size-distribution).
+For a proper finding of correlation between size and coverage I had to remove both, size outliers and coverage outliers.
+
+**Information of the depth coverage distribution of the outliers**
+```{R, echo=F, fig.width=12}
+outliersDF=t(data.frame(
+  anna=c(numTargetsOutliersAnna,summary(anna.6$Coverage)),
+  swift=c(numTargetsOutliersSwift, summary(swift.7$Coverage))
+  ))
+colnames(outliersDF)=c("Num. outliers", "Min.","1st. Qu.","Median","Mean","3rd. Qu.","Max.")
+rownames(outliersDF)=c("map2Anna", "map2Swift")
+outliersDF[1:2,]=prettyNum(outliersDF[1:2,],big.mark=",")
+kable(outliersDF, format="markdown")
+```
+
+**Size distribution after removing outliers**
+
+
+```{R, echo=F, fig.width=12}
+d1=density(anna.6$Size)
+d2=density(swift.7$Size)
+maxY=max(d1$y,d2$y)
+plot(d1,type="l",col="darkred", lwd=3,
+  ylim=c(0,maxY),main="",
+  xlab="Size (bp)")
+points(d2,type="l", col="darkblue", lwd=3)
+legend("topright", col=c("darkred","darkblue"),legend=c("Anna","Swift"),  lwd=3)
+
+outliersDF=rbind(
+  prettyNum(t(summary(anna.6$Size)),big.mark=","),
+  prettyNum(t(summary(swift.7$Size)),big.mark=",")
+)
+
+outliersDF=data.frame(outliersDF)
+colnames(outliersDF)=c("Min.","1st. Qu.","Median","Mean","3rd. Qu.","Max.")
+rownames(outliersDF)=c("map2Anna", "map2Swift")
+kable(outliersDF, format="markdown")
+```
+
+**Coverage distribution after removing size and coverage related outliers**
+
+```{R, echo=F, fig.width=12}
+d1=density(anna.6$Coverage)
+d2=density(swift.7$Coverage)
+maxY=max(d1$y,d2$y)
+plot(d1,type="l",col="darkred", lwd=3,
+  ylim=c(0,maxY),main="",
+  xlab="Depth of coverage")
+points(d2,type="l", col="darkblue", lwd=3)
+legend("topright", col=c("darkred","darkblue"),legend=c("Anna","Swift"),  lwd=3)
+```
+
+```{R, echo=F}
+summarycoveragePerTarget=rbind(
+  t(summary(anna.6$Coverage)),
+  t(summary(swift.7$Coverage))
+)
+summarycoveragePerTarget=data.frame(summarycoveragePerTarget)
+summarycoveragePerTarget$Var=c(
+  var(anna.6$Coverage),
+  var(swift.7$Coverage)
+  )
+summarycoveragePerTarget$Std.Dev=c(
+  sd(anna.6$Coverage),
+  sd(swift.7$Coverage)
+)
+summarycoveragePerTarget=rbind(
+  prettyNum(summarycoveragePerTarget[1,], big.mark=","),
+  prettyNum(summarycoveragePerTarget[2,], big.mark=",")
+)
+colnames(summarycoveragePerTarget)=c("Min.","1st. Qu.","Median", "Mean","3rd. Qu","Max.","Var.","Std. Dev")
+rownames(summarycoveragePerTarget)=c("map2Anna without outliers","map2Swift without outliers")
+kable(summarycoveragePerTarget, format="markdown")
+
+```
+</div>
+</div>
+
+
+
+
+#### Target size vs. depth of coverage
+<!-- http://blog.yhat.com/posts/r-lm-summary.html -->
+<!-- http://data.princeton.edu/R/linearModels.html -->
+<!-- http://feliperego.github.io/blog/2015/10/23/Interpreting-Model-Output-In-R -->
+
+I'm looking for a relation between target size and depth of coverage.
+
+```{R, echo=F, fig.width=12,fig.height=6}
+lmdTargetAnna=lm(anna.6$Coverage~anna.6$Size)
+lmdTargetSwift=lm(swift.7$Coverage~swift.7$Size)
+layout(matrix(c(1,2),1,2))
+plot(anna.6$Size,anna.6$Coverage, pch=20,
+   xlab="Target size",ylab="Depth of coverage",axes=F, main="map2Anna")
+abline(lmdTargetAnna, col="red",lwd=2)
+axis(1);axis(2)
+plot(swift.7$Size,swift.7$Coverage, pch=20,
+   xlab="Target size",ylab="Depth of coverage",axes=F, main="map2Swift")
+abline(lmdTargetSwift, col="red",lwd=2)
+axis(1);axis(2)
+```
+
+<ul class="nav nav-tabs">
+<li class="active"><a href="#lmdTargetAnna" data-toggle="tab">map2Anna summary(lmd)</a></li>
+<li><a href="#lmdTargetSwift" data-toggle="tab">map2Swift summary(lmd)</a></li>
+</ul>
+<div id="myTabContent" class="tab-content">
+<div class="tab-pane fade active in" id="lmdTargetAnna">
+
+<div class="panel panel-warning">
+<div class="panel-heading">Results from the `lm()` function that need to be discussed</div>
+<div class="panel-body">
+```{R, echo=F, fig.width=10,fig.height=8}
+summary(lmdTargetAnna)
+layout(matrix(c(1,2,3,4), 2,2, byrow=T))
+plot(lmdTargetAnna, pch=16)
+```
+</div>
+</div>
+
+</div>
+<div class="tab-pane fade" id="lmdTargetSwift">
+<div class="panel panel-warning">
+<div class="panel-heading">Results from the `lm()` function that need to be discussed</div>
+<div class="panel-body">
+```{R, echo=F,fig.width=10,fig.height=8}
+summary(lmdTargetSwift)
+layout(matrix(c(1,2,3,4), 2,2, byrow=T))
+plot(lmdTargetSwift, pch=16)
+```
+</div>
+</div>
+
+
+</div>
+</div> <!-- end div -->
+
+
+
+
+## Overview
+
+While there is no specific color key for the coverage values, this will only serve as an overview of the coverage per target/gene per sample.
+
+- Yellow maximum coverage
+- Red minimum coverage.
+
+
+```{R, echo=F}
+matrixAnnaFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/anna/files2/coverage.matrix.per.gene.txt"
+matrixSwiftFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/swift/files2/coverage.matrix.per.gene.txt"
+matrixAnna=as.matrix(read.table(matrixAnnaFile, stringsAsFactors=F,header=T))
+rownames(matrixAnna)=unique(anna.3$V9)
+geneSizesAnna=sapply(split(anna.3,anna.3$V9), function(x){sum(anna.3$V5-anna.3$V4)})
+matrixAnna=matrixAnna/geneSizesAnna
+matrixSwift=as.matrix(read.table(matrixSwiftFile, stringsAsFactors=F,header=T))
+rownames(matrixSwift)=unique(swift.4$V9)
+
+geneSizesSwift=sapply(split(swift.4,swift.4$V9), function(x){sum(swift.4$V5-swift.4$V4)})
+matrixSwift=matrixSwift/geneSizesSwift
+genesAnnaAfterOutlierRemoval=data.frame(  Gene=as.character(unique(anna.6$V9)),  Size=geneSizesAnna[unique(anna.6$V9)])
+genesSwiftAfterOutlierRemoval=data.frame(  Gene=as.character(unique(swift.7$V9)),  Size=geneSizesSwift[unique(swift.7$V9)])
+
+
+matrixTargetsAnnaFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/anna/files2/coverage.matrix.per.target.txt"
+matrixTargetsSwiftFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/swift/files2/coverage.matrix.per.target.txt"
+matrixTargetsAnna=as.matrix(read.table(matrixTargetsAnnaFile, stringsAsFactors=F,header=T))
+rownames(matrixTargetsAnna)=anna.3$targetname
+targetSizesAnna=anna.3$V5-anna.3$V4
+matrixTargetsAnna=matrixTargetsAnna/targetSizesAnna
+matrixTargetsSwift=as.matrix(read.table(matrixTargetsSwiftFile, stringsAsFactors=F,header=T))
+rownames(matrixTargetsSwift)=swift.4$targetname
+targetSizesSwift=swift.4$V5-swift.4$V4
+matrixTargetsSwift=matrixTargetsSwift/targetSizesSwift
+
+```
+
+<ul class="nav nav-tabs">
+<li class="active"><a href="#genes-small-dataset" data-toggle="tab">Genes (25 Genes  matrix)</a></li>
+<li><a href="#genes-wholematrixreduced" data-toggle="tab">Genes (Complete Matrix - without outliers)</a></li>
+<li><a href="#genes-wholematrix" data-toggle="tab">Genes (Complete Matrix)</a></li>
+<li><a href="#targets-small-dataset" data-toggle="tab">Targets (25 Targets Matrix)</a></li>
+<li><a href="#targets-wholematrixreduced" data-toggle="tab">Targets (Complete matrix - Wihtout outliers)</a></li>
+<li><a href="#targets-wholematrix" data-toggle="tab">Targets (Complete matrix)</a></li>
+</ul>
+<div id="myTabContent" class="tab-content">
+
+<div class="tab-pane fade active in" id="genes-small-dataset">
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+smallMatrixGenesAnna=matrixAnna[genesAnnaAfterOutlierRemoval$Gene,]
+heatmap(smallMatrixGenesAnna[1:25,],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+smallMatrixGenesSwift=matrixSwift[genesSwiftAfterOutlierRemoval$Gene,]
+heatmap(smallMatrixGenesSwift[1:25,],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+</div>
+</div>
+
+<div class="tab-pane fade" id="genes-wholematrixreduced">
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+heatmap(matrixAnna[genesAnnaAfterOutlierRemoval$Gene,],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+<div class="col-lg-6">
+<div class="bs-component">
+```{R,cache=T, echo=F, fig.width=12, fig.height=12}
+heatmap(matrixSwift[genesSwiftAfterOutlierRemoval$Gene,],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+</div>
+</div>
+
+<div class="tab-pane fade" id="genes-wholematrix">
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+heatmap(matrixAnna,Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+heatmap(matrixSwift,Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+</div>
+</div>
+
+
+<div class="tab-pane fade" id="targets-small-dataset">
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+smallMatrixTargetsAnna=matrixTargetsAnna[anna.6$targetname,]
+heatmap(smallMatrixTargetsAnna[1:50,],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+smallMatrixTargetsSwift=matrixTargetsSwift[swift.7$targetname,]
+heatmap(smallMatrixTargetsSwift[1:50,],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+</div>
+</div>
+
+
+<div class="tab-pane fade" id="targets-wholematrixreduced">
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+heatmap(matrixTargetsAnna[anna.6$targetname, ],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+<div class="col-lg-6">
+<div class="bs-component">
+```{R,cache=T, echo=F, fig.width=12, fig.height=12}
+heatmap(matrixTargetsSwift[swift.7$targetname,],Rowv=NA,Colv=NA,labRow=NA)
+
+```
+</div>
+</div>
+</div>
+</div>
+
+<div class="tab-pane fade" id="targets-wholematrix">
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+heatmap(matrixTargetsAnna,Rowv=NA,Colv=NA,labRow=NA)
+
+
+```
+</div>
+</div>
+<div class="col-lg-6">
+<div class="bs-component">
+```{R, cache=T,echo=F, fig.width=12, fig.height=12}
+heatmap(matrixTargetsSwift,Rowv=NA,Colv=NA,labRow=NA)
+
+
+```
+</div>
+</div>
+</div>
+</div>
+</div>
+
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title"> **SARA COMMENT**</h3>
+</div>
+<div class="panel-body">
+
+red/yellow = min/max coveragre (absolute? of the coverage distribution?)... just that is weird that most of the plot is red (or there were darker reds and this represents somehow an "intermediate" value of the cov distribution?
+(From the "targets" plots... one can see that there is a "sample" and a "locus/target" effect."sample" effect is stronger... this goes on the lines of what we had though for your sims... using a "factor" per "sample/individual"... right?
+</div>
+</div>
+
+
+## Genes not captured
+
+- This is a summary of the genes that were not totally captured. Meaning, coverage is below 1x.
+
+```{R, echo=F,fig.width=12}
+matrixAnnaNC=matrixAnna
+matrixSwiftNC=matrixSwift
+matrixAnnaNC[matrixAnna!=0]=1
+matrixSwiftNC[matrixSwift!=0]=1
+nMatrixAnna=1-matrixAnnaNC
+nMatrixSwift=1-matrixSwiftNC
+rownames(nMatrixAnna)=rownames(matrixAnna)
+rownames(nMatrixSwift)=rownames(matrixSwift)
+
+smallMatrixAnnaNC=smallMatrixGenesAnna
+smallMatrixSwiftNC=smallMatrixGenesSwift
+smallMatrixAnnaNC[smallMatrixGenesAnna!=0]=1
+smallMatrixSwiftNC[smallMatrixGenesSwift!=0]=1
+nsmallMatrixAnnaNC=1-smallMatrixAnnaNC
+nsmallMatrixSwiftNC=1-smallMatrixSwiftNC
+rownames(nsmallMatrixAnnaNC)=rownames(nsmallMatrixAnnaNC)
+rownames(nsmallMatrixSwiftNC)=rownames(nsmallMatrixSwiftNC)
+
+
+maxY=roundUpNice(max(c(
+  colSums(nMatrixAnna),
+  colSums(nsmallMatrixAnnaNC),
+  colSums(nMatrixSwift),
+  colSums(nsmallMatrixSwiftNC))
+))+10
+# number of samples with a gene that was not captured
+plot(c(0,colSums(nMatrixAnna),0),
+     type="b",col="darkred",
+     ylim=c(0.01,maxY),lwd=2, axes=F,
+     xlab="Samples",ylab="Number of genes not covered (not a single base)"
+   )
+points(c(0,colSums(nsmallMatrixAnnaNC),0), type="b",col="red", lwd=2)   
+points(colSums(nMatrixSwift), type="b",col="darkblue", lwd=2)
+points(colSums(nsmallMatrixSwiftNC), type="b",col="blue", lwd=2)
+axis(2);axis(1, at=1:48, labels = sampleNamesSwift, las=2)
+legend("topright", col=c("darkred","red","darkblue","blue"),legend=c("Anna full", "Anna wo outliers","Swift full", "Swift wo outliers"),  lwd=3, pch=1)
+```
+
+- Are these genes the same per sample?
+    - No, they are not. This is the list of genes not captured in the Swift dataset, taking into account that the Anna dataset has all genes with coverage  `>0x`.
+    - H46 and H47 were samples with really low coverage, it can be expected to loose some genes when doing the capture.
+    - Also for both datasets (full and without outliers) missing genes are the same.
+
+```{R,echo=F,fig.width=12}
+# identify samples that have a not captured gene
+samplesNotCoveredGenesInAnna=colnames(matrixAnna)[colnames(matrixAnna) %in% colnames(nMatrixAnna)[colSums(nMatrixAnna)>0]]
+samplesNotCoveredGenesInSwift=colnames(matrixSwift)[colnames(matrixSwift) %in% colnames(nMatrixSwift)[colSums(nMatrixSwift)>0]]
+
+genesNotCoveredPerSample=list()
+for (i in 1:length(samplesNotCoveredGenesInSwift)){
+  genesNotCoveredPerSample[[i]]=rownames(nMatrixSwift)[nMatrixSwift[,samplesNotCoveredGenesInSwift[i]] > 0]
+}
+intersectedGenes=Reduce(intersect,genesNotCoveredPerSample)
+
+
+samplesNotCoveredGenesInAnna=colnames(smallMatrixGenesAnna)[colnames(smallMatrixGenesAnna) %in% colnames(nsmallMatrixAnnaNC)[colSums(nsmallMatrixAnnaNC)>0]]
+samplesNotCoveredGenesInSwift=colnames(smallMatrixGenesSwift)[colnames(smallMatrixGenesSwift) %in% colnames(nsmallMatrixSwiftNC)[colSums(nsmallMatrixSwiftNC)>0]]
+
+genesNotCoveredPerSampleS=list()
+for (i in 1:length(samplesNotCoveredGenesInSwift)){
+  genesNotCoveredPerSampleS[[i]]=rownames(nsmallMatrixSwiftNC)[nsmallMatrixSwiftNC[,samplesNotCoveredGenesInSwift[i]] > 0]
+}
+
+intersectedGenesS=Reduce(intersect,genesNotCoveredPerSampleS)
+
+
+df=data.frame(genesFull=unlist(genesNotCoveredPerSample),
+  genesWOout=unlist(genesNotCoveredPerSampleS))
+colnames(df)=c("Full (1.469 Genes)", "Without Outliers")
+
+kable(df, format="markdown")
+```
+
+
+
+## Targets (exons) not captured
+
+This is a summary of the target regions that were not captured per sample.
+
+```{R, echo=F,fig.width=12}
+targetsAnnaAfterOutliersRemoval=matrixTargetsAnna[anna.6$targetname,]
+targetsSwiftAfterOutliersRemoval=matrixTargetsSwift[swift.7$targetname,]
+
+
+matrixAnnaNC=matrixTargetsAnna
+matrixSwiftNC=matrixTargetsSwift
+matrixAnnaNC[matrixTargetsAnna!=0]=1
+matrixSwiftNC[matrixTargetsSwift!=0]=1
+nMatrixAnna=1-matrixAnnaNC
+nMatrixSwift=1-matrixSwiftNC
+rownames(nMatrixAnna)=rownames(matrixTargetsAnna)
+rownames(nMatrixSwift)=rownames(matrixTargetsSwift)
+
+smallMatrixAnnaNC=smallMatrixTargetsAnna
+smallMatrixSwiftNC=smallMatrixTargetsSwift
+smallMatrixAnnaNC[smallMatrixTargetsAnna!=0]=1
+smallMatrixSwiftNC[smallMatrixTargetsSwift!=0]=1
+nsmallMatrixAnnaNC=1-smallMatrixAnnaNC
+nsmallMatrixSwiftNC=1-smallMatrixSwiftNC
+rownames(nsmallMatrixAnnaNC)=rownames(smallMatrixTargetsAnna)
+rownames(nsmallMatrixSwiftNC)=rownames(smallMatrixTargetsSwift)
+
+
+
+maxY=roundUpNice(max(c(
+  colSums(nMatrixAnna),
+  colSums(nsmallMatrixAnnaNC),
+  colSums(nMatrixSwift),
+  colSums(nsmallMatrixSwiftNC))
+))+200
+# number of samples with a gene that was not captured
+plot(c(0,colSums(nMatrixAnna),0),
+     type="b",col="darkred",
+     ylim=c(0.01,maxY),lwd=2, axes=F,
+     xlab="Samples",ylab="Number of targets not captured (0x)"
+   )
+points(c(0,colSums(nsmallMatrixAnnaNC),0), type="b",col="red", lwd=2)   
+points(colSums(nMatrixSwift), type="b",col="darkblue", lwd=2)
+points(colSums(nsmallMatrixSwiftNC), type="b",col="blue", lwd=2)
+axis(2);axis(1, at=1:48, labels = sampleNamesSwift, las=2)
+legend("topright", col=c("darkred","red","darkblue","blue"),legend=c("Anna full", "Anna wo outliers","Swift full", "Swift wo outliers"),  lwd=3, pch=1)
+
+```
+
+
+- The following table presents the number of common not captured targets within samples. F
+
+```{R,echo=F,fig.width=12}
+# identify samples that have a not captured gene
+samplesNotCoveredTargetsInAnna=colnames(matrixTargetsAnna)[colnames(matrixTargetsAnna) %in% colnames(nMatrixAnna)[colSums(nMatrixAnna)>0]]
+samplesNotCoveredTargetsInSwift=colnames(matrixTargetsSwift)[colnames(matrixTargetsSwift) %in% colnames(nMatrixSwift)[colSums(nMatrixSwift)>0]]
+samplesNotCoveredTargetsInAnnaWO=colnames(targetsAnnaAfterOutliersRemoval)[colnames(targetsAnnaAfterOutliersRemoval) %in% colnames(nsmallMatrixAnnaNC)[colSums(nsmallMatrixAnnaNC)>0]]
+samplesNotCoveredTargetsInSwiftWO=colnames(targetsSwiftAfterOutliersRemoval)[colnames(targetsSwiftAfterOutliersRemoval) %in% colnames(nsmallMatrixSwiftNC)[colSums(nsmallMatrixSwiftNC)>0]]
+
+targetsNotCoveredPerSampleAnna=list();targetsNotCoveredPerSampleAnnaWO=list()
+targetsNotCoveredPerSampleSwift=list();targetsNotCoveredPerSampleSwiftWO=list()
+for (i in samplesNotCoveredTargetsInAnna){
+  targetsNotCoveredPerSampleAnna[[i]]=rownames(nMatrixAnna)[nMatrixAnna[,i]>0]
+}
+for (i in samplesNotCoveredTargetsInSwift){
+  targetsNotCoveredPerSampleSwift[[i]]=rownames(nMatrixSwift)[nMatrixSwift[,i]>0]
+}
+
+for (i in samplesNotCoveredTargetsInAnnaWO){
+  targetsNotCoveredPerSampleAnnaWO[[i]]=rownames(nMatrixAnna)[nMatrixAnna[,i]>0]
+}
+for (i in samplesNotCoveredTargetsInSwiftWO){
+  targetsNotCoveredPerSampleSwiftWO[[i]]=rownames(nMatrixSwift)[nMatrixSwift[,i]>0]
+}
+
+intersectedTargetsAnna=Reduce(intersect,targetsNotCoveredPerSampleAnna)
+intersectedTargetsSwift=Reduce(intersect,targetsNotCoveredPerSampleSwift)
+intersectedTargetsAnnaWO=Reduce(intersect,targetsNotCoveredPerSampleAnna)
+intersectedTargetsSwiftWO=Reduce(intersect,targetsNotCoveredPerSampleSwift)
+intersectBoth=intersect(list(intersectedTargetsAnna), list(intersectedTargetsSwift)) # this is empty
+intersectBothWO=intersect(list(intersectedTargetsAnnaWO), list(intersectedTargetsSwiftWO)) # this is empty
+
+df=data.frame(
+  intersectedTargetsAnnaNum=c(length(intersectedTargetsAnna),length(intersectedTargetsAnna)/nrow(nMatrixAnna)),
+  intersectedTargetsAnnaNumWO=c(length(intersectedTargetsAnnaWO),length(intersectedTargetsAnnaWO)/nrow(nsmallMatrixAnnaNC)),
+  intersectedTargetsSwiftNum=c(length(intersectedTargetsSwift),length(intersectedTargetsSwift)/nrow(nMatrixSwift)),
+  intersectedTargetsSwiftNumWO=c(length(intersectedTargetsSwiftWO),length(intersectedTargetsSwiftWO)/nrow(nsmallMatrixSwiftNC)),
+  intersectedTargetsBothNum=c(length(intersectBoth),0),
+  intersectedTargetsBothNumWO=c(length(intersectBothWO),0)
+)
+df[2,]=df[2,]*100
+df=rbind(df,c("Full dataset" ,"Outliers removed" ,"Full dataset" ,"Outliers removed" ,"Full Dataset" ,"Outliers removed"))
+colnames(df)=c(
+  "Within map2Anna samples",
+  "Within map2Anna samples",
+  "Within map2Swift samples",
+  "Within map2Swift samples",
+  "Across datasets",
+  "Across datasets"
+)
+rownames(df)=c("Number of common targets not captured (within samples)", "Percentage (common target/total target regions)","Dataset")
+df=df[c(3,1,2),]
+kable(t(df), format="markdown")
+
+```
+- This shows that there are not common target regions across datasets. Makes sense that they do not match, because coordinates from the `Ànna` and `Swift`
+references are exactly the same.
+- Number of targets not captured is lower in the `map2Swift` dataset, even though the percentages are similar (1%), this was expected.
+- Also, the differences between the with/without outliers datasets are consistent to the removal of outliers.
+- I cannot find a possible reason why these regions where not captured, but the fact that the probes for such targets simply did not work.
+- Then, going through the sizes of those targets, it does not show much, mean size  is ~130 bp, which is close to the size of the probes.
+
+
+```{R, echo=F, fig.width=12,fig.height=6}
+a1=anna.6$Size
+a2=swift.7$Size
+d1=density(a1)
+d2=density(a2)
+maxY=max(d1$y,d2$y)
+plot(d1,type="l", col="red", ylim=c(0,maxY), xlab="Target size", main="",lwd=2)
+points(d2,type="l", col="blue", lwd=2)
+abline(v=mean(a1), col="red", lty="dashed", lwd=2)
+abline(v=mean(a2), col="blue",  lty="dashed", lwd=2)
+legend("topright", legend=c("Mean size of non recovered targets in map2Anna","Mean size of non recovered targets in map2Swift"), col=c("red","blue"), lty="dashed", lwd=2)
+summarydf=data.frame(rbind(t(summary(a1)),t(summary(a2))))
+summarydf[1:2,]=rbind(
+  prettyNum(summarydf[1,], big.mark=","),
+  prettyNum(summarydf[2,], big.mark=",")
+)
+colnames(summarydf)=c("Min.","1st. Qu.","Median", "Mean","3rd. Qu","Max.")
+rownames(summarydf)=c("Anna","Swift")
+kable(summarydf,format="markdown"  )
+```
+
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**SARA COMMENT**</h3>
+</div>
+<div class="panel-body">
+- I am confused with the sentences:
+
+> " This shows that there are not common target regions across datasets. Makes sense that they do not match, because the target
+ file of the map2Swift was match (by genes) to the map2Anna target file, and coordinates are different"
+
+- confusing, and (biologically) I don't know what you mean... even if "coordinates" are not exactly the same... most of the regions of the capture are "homologous" across all species, right? meaning most "are the same".
+
+</div>
+<div class="panel-footer">
+- Technically speaking is ok they do not match, due to the fact that the coordinates are not the same.
+- Then, taking into account that the regions are the "same",  biologically speaking,
+I tried to check whether there where "missing" targets within the same genes. And so this is what I found:
+
+```{R, echo=F}
+anna.7=anna.6[anna.6$targetname %in% intersect(anna.6$targetname, intersectedTargetsAnnaWO),]
+swift.8=swift.7[swift.7$targetname %in% intersect(swift.7$targetname, intersectedTargetsSwiftWO),]
+numGenesToWhichTargetBelongAnna=length(unique(anna.7$V9))
+numGenesToWhichTargetBelongSwift=length(unique(swift.8$V9))
+annaGenesInSwift=birds.6[birds.6$anna %in% unique(anna.7$V9),]$swift
+commonGenesWithTargetsNotCaptured=intersect(unique(swift.8$V9), annaGenesInSwift)
+print(commonGenesWithTargetsNotCaptured)
+```
+-  The genes above from the targets not capture to which they belong and compared them
+across the datasets (`map2Anna` and  `map2Swift`), getting:
+    - Number of genes to which the not captured targets in the `map2Anna` dataset: **`r numGenesToWhichTargetBelongAnna`** .
+    - Number of genes to which the not captured targets in the `map2Swift` dataset:  **`r numGenesToWhichTargetBelongSwift`**
+    - Number of targets not captured per each dataset vary:
+        - **`r nrow(anna.7)`**
+        - **`r nrow(swift.8)`**
+    - There are **`r length(commonGenesWithTargetsNotCaptured)`** common genes across datasets.
+
+</div>
+</div>
+
+
+
+
+# Off-target regions
+
+## Generation of off target datasets
+
+The off-target regions correspond to those regions of the genome that were not included in the target list.  
+
+To calculate this, for the purpose of this analysis,  there are two (`2`) approaches for the off-target regions.
+
+1. The first, considers off-target regions as the difference between the genome that can be captured and the regions in the targets file.
+2. The second, considers off-target regions as a set difference between the capture genome and the codon regions in `Calypte_anna.gene.CDS.2750.2.gff` and the regions in `Chaetura_pelagica.CDS.2.gff`, for their corresponding dataset.
+    - This is the definition that is going to be used. This is due to the fact that codon regions in each file correspond to those genes that are known to be one-to-one orthologs. There is a possibility that there might be more potential orthologs within the rest of the genes, and so is possible that some of the reads may have mapped to those genes due to the similarity of the regions.
+
+
+In order to know what is the size of the off-target regions, I first needed to obtain the size of the genome per each of the species.
+To do that, I needed the size of the scaffolds, which I got using:
+
+```{bash, eval=F}
+samtools faidx Calypte_anna.fasta
+cut -f1,2 Calypte_anna.fasta.fai > Calypte_anna.sizes
+
+samtools faidx Chaetura_pelagica.fasta
+cut -f1,2 Chaetura_pelagica.fasta.fai > Chaetura_pelagica.sizes
+```
+With the size of the scaffolds per each species, I can generate a `BED` file describing the coordinates of the scaffolds.
+
+```{R, eval=F}
+finalBed=cbind(genomeSizesAnna$Scaffold,rep(1,nrow(genomeSizesAnna)),genomeSizesAnna$Size)
+write.table(finalBed,paste0(WD,"scaffolds.anna.bed"), row.names = F,col.names = F,quote = F, sep="\t")
+
+finalBed=cbind(genomeSizesSwift$Scaffold,rep(1,nrow(genomeSizesSwift)),genomeSizesSwift$Size)
+write.table(finalBed,paste0(WD,"scaffolds.swift.bed"), row.names = F,col.names = F,quote = F, sep="\t")
+```
+
+We know the set of scaffolds that represent the reference genomes and the  position of the codons per dataset (represented in the darker box, bottom), the
+`Calypte_anna.gene.CDS.2750.gff` file, for the `map2Anna` dataset and the `Chaetura_pelagica.CDS.2.gff` for the `map2Swift` dataset with the
+relation of the codons to their corresponding genes.
+
+[![***Off-target generation***](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/offtarget.generation.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical/general/offtarget.generation.png)
+*(Click image to enlarge)*
+
+Then, used [`bedtools subtract`](http://bedtools.readthedocs.io/en/latest/content/tools/subtract.html) (searches for features in B that overlap A. If an overlapping feature is found in B, the overlapping portion is removed from A and the remaining portion of A is reported) to removed all possible targets from the `GFF` files out of their corresponding ***scaffolds*** file, obtaining two (`2`) `BED` files, one per dataset.
+
+```{bash, eval=F}
+bedtools subtract -a scaffolds.anna.bed -b $gffAnna > "$HOME/files/offtarget.anna.bed" &
+bedtools subtract -a scaffolds.anna.bed -b $gffSwift > "$HOME/files/offtarget.swift.bed" &
+```
+
+
+```{R, echo=F}
+scaffoldsAnnaFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/files/scaffolds.anna.bed"
+scaffoldsSwiftFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/files/scaffolds.swift.bed"
+scaffoldsAnna=read.table(scaffoldsAnnaFile, colClasses=c("character","numeric","numeric"))
+scaffoldsSwift=read.table(scaffoldsSwiftFile, colClasses=c("character","numeric","numeric"))
+basesScaffoldsAnna=sum(scaffoldsAnna$V3)
+basesScaffoldsSwift=sum(scaffoldsSwift$V3)
+offtargetsAnnaFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/files/offtarget.anna.bed"
+offtargetsSwiftFile="/media/merly/Baymax/research/cph-visit/coverage-analysis/files/offtarget.swift.bed"
+offtargetsAnna=read.table(offtargetsAnnaFile, colClasses=c("character","numeric","numeric"))
+offtargetsSwift=read.table(offtargetsSwiftFile, colClasses=c("character","numeric","numeric"))
+offtargetsAnna$Size=offtargetsAnna$V3-offtargetsAnna$V2
+offtargetsSwift$Size=offtargetsSwift$V3-offtargetsSwift$V2
+
+dfofftargets=data.frame(
+  numScaffolds=prettyNum(c(nrow(scaffoldsAnna),nrow(scaffoldsSwift)), big.mark=","),
+  totalSizeGenome=prettyNum(c(basesScaffoldsAnna,basesScaffoldsSwift), big.mark=","),
+  numTargetsOfftarget=prettyNum(c(nrow(offtargetsAnna), nrow(offtargetsSwift)), big.mark=","),
+  sizeGenomeOfftarget=prettyNum(c(sum(offtargetsAnna$Size), sum(offtargetsSwift$Size)), big.mark=",")
+)
+colnames(dfofftargets)=c("Number of scaffolds", "Genome Size", "Number of resulting off-target regions", "Genome Size (Off-target)")
+rownames(dfofftargets)=c("Anna","Swift")
+
+dfofftargetsizes=data.frame(
+  scaffoldSizeAnna=c("Scaffold",prettyNum(t(summary(scaffoldsAnna$V3)), big.mark=",")),
+  scaffoldSizeSwift=c("Scaffold",prettyNum(t(summary(scaffoldsSwift$V3)), big.mark=",")),
+  targeSizeAnna=c("Target",prettyNum(t(summary(offtargetsAnna$Size)), big.mark=",")),
+  targeSizeSwift=c("Target",prettyNum(t(summary(offtargetsSwift$Size)), big.mark=","))
+)
+rownames(dfofftargetsizes)=c("Unit","Min.","1st. Qu.","Median", "Mean","3rd. Qu","Max.")
+colnames(dfofftargetsizes)=c("Anna","Swift","Anna","Swift")
+dfofftargetsizes=t(dfofftargetsizes)
+```
+
+***General overview of scaffolds and resulting off-target regions***
+
+```{R, echo=F}
+kable(dfofftargets, format="markdown")
+```
+
+***General overview of the size distribution of off-target regions***
+
+```{R, echo=F}
+kable(dfofftargetsizes, format="markdown")
+```
+
+## Off-target regions across samples
+
+The idea is to identify the off-target regions, as well as the size that covers and how is the coverage distribution within this regions compared to the on-target coverage.
+
+To obtain coverage information from the off-target regions:
+
+```{bash, eval=F}
+for bamfile in $(find $originalsAnna -name "*.bam" ); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+  nohup bedtools coverage -hist -abam $bamfile -b "$HOME/files/offtarget.anna.bed" | gzip > $HOME/anna/bedtools/cov2/${tag}.cov.gz &
+done
+for bamfile in $(find $originalsSwift -name "*.bam"  ); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+  nohup bedtools coverage -hist -abam $bamfile -b "$HOME/files/offtarget.swift.bed" | gzip > $HOME/swift/bedtools/cov2/${tag}.cov.gz &
+done
+#  hist split
+for tag in $(cat $HOME/anna/files/samples.txt  ); do
+  zcat $HOME/anna/bedtools/cov2/$tag.cov.gz | grep -v ^all | gzip > $HOME/anna/bedtools/nohist2/$tag.nohist.gz
+  zcat $HOME/anna/bedtools/cov2/$tag.cov.gz | grep ^all | gzip > $HOME/anna/bedtools/hist2/$tag.hist.gz
+done
+for tag in $(cat $HOME/swift/files/samples.txt  ); do
+  zcat $HOME/swift/bedtools/cov2/$tag.cov.gz | grep -v ^all | gzip > $HOME/swift/bedtools/nohist2/$tag.nohist.gz
+  zcat $HOME/swift/bedtools/cov2/$tag.cov.gz | grep ^all | gzip > $HOME/swift/bedtools/hist2/$tag.hist.gz
+done
+```
+
+## Breadth vs. depth of coverage
+
+I followed what has been done for the on-target regions to get this information. Getting how much of the off-target regions was captured, and at which depth.
+
+| `map2Anna` | `map2Swift`      |
+|------------|------------------|
+|[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/2.breadth.vs.coverage.2.zoom.500.offtarget1.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/anna/2.breadth.vs.coverage.2.zoom.500.offtarget1.png) *(Click image to enlarge)*| [![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/2.breadth.vs.coverage.2.zoom.500.offtarget1.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/swift/2.breadth.vs.coverage.2.zoom.500.offtarget1.png) *(Click image to enlarge)*|
+|  X-axis: 0-20 | X-axis: 0-20 |
+
+- For the `map2Anna` dataset, for both off-target sets breadth vs. depth looks the same. Same situation with the `mat2Swift` dataset.
+- For the `map2Anna`, we see that the general depth is low, 25% of the off-target regions are covered at 1x for most of the samples.
+- For the `map2Swift`, we see that there are 3  situations:
+    - Swift sample is the one that has more coverage in general (gray thick line)
+    - Anna and H10 have a "medium" level coverage
+    - Rest of the sample behaves in the same way as in the other dataset.
+    - For Anna and Swift samples makes sense that the general off-target coverage is higher because these to sample datasets come from a whole-genome sequencing (WGS) experiment.
+
+## Depth of coverage
+### Coverage per sample
+
+```{R,echo=F, fig.width=12}
+perSampleAnna1=unlist(read.table("/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/offtarget1.coverage.per.sample.txt"))
+perSampleSwift1=unlist(read.table("/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/offtarget1.coverage.per.sample.txt"))
+perSampleAnna1=c(0,perSampleAnna1,0) # counting for those samples that are not in map2Anna but are in map2Swift
+
+plot(1:48,perSampleAnna1,type="l",lwd=2,lty="solid", axes=F,col="darkred", ylab="Depth of coverage", xlab="Samples")
+lines(1:48,perSampleSwift1,lwd=2,lty="solid", col="darkblue")
+axis(2); axis(1,at=1:48,labels=sampleNamesSwift, las=2)
+
+legend("topright",
+  col=c("darkred","darkblue"),
+  lwd=2,
+  legend=c("map2Anna","map2Swift"))
+```
+
+- The 0x coverage for `AnnaBGI` and `SwiftBGI` in the `map2Anna` datasets, is because these samples were not in that mapping.
+- It is possible to see that the general coverage of the off-target regions is **< 1x** for all the samples. Less than 1% of the on-target coverages seen.
+
+### Coverage per target
+```{R,echo=F, fig.width=15, fig.height=8}
+targetAnna1=unlist(read.table("/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/offtarget1.coverage.per.target.txt"))
+targetSwift1=unlist(read.table("/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/offtarget1.coverage.per.target.txt"))
+
+summaryCoverageOffTarget=data.frame(
+  rbind(
+    t(summary(targetAnna1)),
+    t(summary(targetSwift1))
+  )
+)
+summaryCoverageOffTarget$Var=c(
+  var(targetAnna1),
+  var(targetSwift1)
+  )
+summaryCoverageOffTarget$Std.Dev=c(
+  sd(targetAnna1),
+  sd(targetSwift1)
+  )
+for (i in 1:nrow(summaryCoverageOffTarget)){
+  summaryCoverageOffTarget[i,]=prettyNum(summaryCoverageOffTarget[i,], big.mark=",", preserve.width="individual")
+}
+colnames(summaryCoverageOffTarget)=c("Min.","1st. Qu.","Median", "Mean","3rd. Qu","Max.","Var.","Std. Dev")
+rownames(summaryCoverageOffTarget)=c("map2Anna","map2Swift")
+
+kable(summaryCoverageOffTarget, format="markdown")
+```
+
+- Most of the targets are below 1x (< 3rd.Quartile)
+- The coverage among targets has a really high variability.
+
+# Relation within coverage and phylogenetic distance
+
+I am trying to analyze if there is any correlation between the depth of coverage and the phylogenetic distance from the reference species, used for the probe generation and mapping.
+
+## Phylogenetic reconstruction
+
+Information of the phylogenetic reconstruction I got from the Hummingbirds Paper, this says that it was made with mitochondrial genome and nuclear gene trees using either a concatenation approach with RAxML [[3]](#raxml) or the multi-species coalescent approach implemented in ASTRAL [[4]](#astral) and ASTRAL-II [[5]](#astralii).
+
+The phylogenies were built using subsets of the nuclear genes present the same topology between the main groups of hummingbirds with high confidence.
+The three subsets correspond to:
+
+1. the 2949 genes that were successfully captured (in a minimum of 8 species)
+2. the 1987 genes for which we could assign a high confidence swift orthologs determined in [[5]](#jarvis) (used as a root)
+3. the 741 genes within the latter that produced trees with average support above 50%.
+
+This is the Supplementary Table S5 (from the Hummingbirds Paper), describing the subsets selected:
+
+
+| number of genes     | minimum number of sites per species (concatenated) | maximum number of sites per species (concatenated) | includes outgroup | ASTRAL score |
+|---------------------|----------------------------------------------------|----------------------------------------------------|-----------------|--------------|
+| 741                 | 949,470                                       |   1,542,750  |                 yes| 87%|
+| 1987                | 1,667,071                                     |   2,783,832  |                 yes |78%|
+| 2949                | 2,473,664                                     |   3,792,500  |                      | |
+
+[![***Maximum likelihood tree***](/media/merly/Baymax/research/cph-visit/img/inferred.phylogeny.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/inferred.phylogeny.png)
+*(Click image to enlarge)*
+
+- `Cpe`, outgroup reference.
+- `Aan`, ingroup reference.
+
+
+
+## Depth of coverage vs. phylogenetic distance
+
+For the analysis shown above as well as for phylogeny reconstruction using the dataset (1) with **2,949** genes.
+
+To obtain the distance matrix I used the tree obtained with RAxML, from the concatenation of 2,750 genes. The tree gives me the branch lengths in number of substitutions per site. So, the distance calculated here, is the pairwise distance between the tips. This was done with the R package `phangorn` [[7]](#phangorn), and its `cophenetic` function. This function computes the pairwise distances between the pairs of tips from a phylogenetic network using its branch lengths.
+
+```{R}
+sampleColors = colorRampPalette(brewer.pal(9, "Set1"))(48)
+treefile="/home/merly/git/cph-visit/coverage-analysis/empirical/data/trees/RAxML_bipartitions.2011.concat"
+tree=read.nexus(treefile)
+distMatrix=cophenetic(tree)
+dCpe=distMatrix["Cpe",]
+dAan=distMatrix["Aan",]
+distMatrix[upper.tri(distMatrix)]=NA
+```
+<!-- <div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+![Distance matrix](/media/merly/Baymax/research/cph-visit/img/distance.matrix.inferred.phylogeny.png)
+</div>
+</div>
+<div class="col-lg-6">
+<div class="bs-component"> -->
+```{R, echo=F, fig.width=12,fig.heigth=6}
+plot(dCpe[names(dCpe)], type="b",pch=20, col="darkblue", axes=F,
+ylim=c(0,0.2),lwd=2,
+xlab="Samples",ylab="Phylogenetic distance")
+points(dAan[names(dCpe)], type="b", col="darkred", lwd=2)
+axis(2, las=2);axis(1,at=1:length(dCpe),labels=names(dCpe),las=2)
+legend("topright",legend=c("Distance to Outgroup (Cpe/Swift)","Distance to ingroup (Anna)"),
+pch=c(20,1),
+lwd=2, col=c("darkblue","darkred"))
+```
+<!-- </div>
+</div>
+</div> -->
+
+Following the figure F3A in Braggs's paper [[8]](#braggs), where  it shows sequencing coverage as a function of genetic divergence.
+ I have calculated the depth of coverage for both datasets and phylogenetic distance. In the plot below you can see the median target coverage
+ per sample.
+
+```{R, echo=F, fig.width=15,fig.height=12}
+matrixAnnaFile="/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/coverage.matrix.per.target.txt"
+matrixSwiftFile="/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/coverage.matrix.per.target.txt"
+matrixAnna=as.matrix(read.table(matrixAnnaFile, stringsAsFactors=F,header=T))
+matrixSwift=as.matrix(read.table(matrixSwiftFile, stringsAsFactors=F,header=T))
+matrixAnna=matrixAnna/reducedTargets$Size
+matrixSwift=matrixSwift/targetsSwift$Size
+labelsCorrect=c("H05","H01","H08","H03","H04","H06","H02","H07")
+labelsWronglyFormated=c("H5","H1","H8","H3","H4","H6","H2","H7")
+cpe=dCpe[! names(dCpe) %in% c("Cpe","Aan")]
+aan=dAan[! names(dAan) %in% c("Cpe","Aan")]
+namesIds=which(names(aan)%in%labelsCorrect)
+names(aan)[namesIds]=labelsWronglyFormated
+namesIds=which(names(cpe)%in%labelsCorrect)
+names(cpe)[namesIds]=labelsWronglyFormated
+# matrixAnna=matrixAnna/genesAnna$Size
+# matrixSwift=matrixSwift/genesSwift$Size
+mediansPerSampleAnna=apply(matrixAnna,2,median)
+mediansPerSampleSwift=apply(matrixSwift,2,median)
+quantilesAnna=apply(matrixAnna[,names(aan)],2,quantile,c(0.25,0.75))
+quantilesSwift=apply(matrixSwift[,names(cpe)],2,quantile,c(0.25,0.75))
+
+disCoverageAnna=data.frame(distance=aan,
+  median=mediansPerSampleAnna[names(aan)],
+  q1=quantilesAnna[1,],
+  q3=quantilesAnna[2,]
+  )
+
+disCoverageSwift=data.frame(distance=cpe,
+  median=mediansPerSampleSwift[names(cpe)],
+  q1=quantilesSwift[1,],
+  q3=quantilesSwift[2,]
+  )
+
+maxDistanceX=max(disCoverageAnna$distance,disCoverageSwift$distance)
+maxCoverageY=max(disCoverageAnna$q3,disCoverageSwift$q3)
+
+
+layout(matrix(c(1,2),1,2,byrow=T))
+plot(disCoverageAnna$distance,
+     disCoverageAnna$median,
+     xlim=c(0,maxDistanceX),
+     ylim=c(0,maxCoverageY),
+     xlab="Phylogenetic distance",ylab="Depth of coverage",
+     pch=20, col=sampleColors, main = "Distance to ingroup (Anna)")
+arrows(disCoverageAnna$distance,disCoverageAnna$q1,
+       disCoverageAnna$distance,disCoverageAnna$q3,
+       length = 0.05,angle=90, code=3,col=sampleColors)
+plot(disCoverageSwift$distance,
+    disCoverageSwift$median,
+    xlim=c(0,maxDistanceX),
+    ylim=c(0,maxCoverageY),
+    xlab="Phylogenetic distance",ylab="Depth of coverage",
+    pch=20, col=sampleColors, main = "Distance to outgroup (Swift)")
+arrows(disCoverageSwift$distance,disCoverageSwift$q1,
+      disCoverageSwift$distance,disCoverageSwift$q3,
+      length = 0.05,angle=90, code=3,col=sampleColors)
+legend("topleft", legend=rownames(disCoverageSwift), col=sampleColors, lty=1, lwd=2, cex=.9)
+```
+
+
+###  Gene-wise relation
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**SARA COMMENT**</h3>
+</div>
+<div class="panel-body">
+Is the "Detailed" part, a long description of all steps you did to get above, or different things... bit confusing to me... it seems like a different thing, where you'll now look at this relationship PER GENE, right??
+</div>
+<div class="panel-footer">
+In fact they are two different things, so the names have been changed.
+</div>
+</div>
+
+
+After genes with missing data were removed leaving **2,750 genes**, and after
+matching those genes to the ones available in Swift, **1,469**.    
+
+For obtain the relation between depth of coverage and phylogenetic distance gene-wise,
+I will used a smaller dataset (2), with **1,987** genes, which I will intersect
+with those from which I do have the coverage information.
+
+To do that, I generated a new dataset from the intersection of the genes found in `Calypte_anna.gene.CDS.2750.3.gff` (**1,469**), which are those
+ortholog genes matching across datasets,  and the available gene trees  (**1,988**).
+
+```{bash, eval=F}
+
+cat "$WD/files/Calypte_anna.gene.CDS.2750.3.gff" | cut -f9 | uniq | tr "_" " " | awk '{print $2}' | tr ";" " " > g.trees.to.filter.txt
+
+for gtreefile in $(cat $WD/files/g.trees.to.filter.txt); do
+  cp "$WD/trees/gtrees/$gtreefile" "$WD/trees/gtrees.2/"
+done
+```
+
+- Gene trees not found: `R001806, R005562, R009279, R014527, R014590`.
+- Resulting on **1,464** genes.
+- Trees didn't have branch lengths, I moved to the available multiple-sequence alignments (MSA), from which only **741** could be retrieved.
+
+```{bash, eval=F}
+ls "$WD/trees/seqs" | tr "." " " | awk '{print $1}'  > "$WD/files/g.trees.to.filter.seqs.2.txt"
+```
+
+- From those, I generated a smaller subset of gene trees MSAs.
+
+```{bash, eval=F}
+mkdir "$WD/trees/seqs.2"
+for gtreefile in $(cat $WD/files/g.trees.to.filter.seqs.2.txt); do
+  filename="$WD/trees/seqs/${gtreefile}.x.aa.aln.backTranslated.gz"
+  cp $filename "$WD/trees/seqs.2/"
+done
+```
+
+<div class="panel panel-warning">
+<div class="panel-heading">
+<h3 class="panel-title">**SARA COMMENT**</h3>
+</div>
+<div class="panel-body">
+You made an underlying assumption that "hamming distances" will reflect phylogenetic distance.
+May not be exactly like that, but, ok, I think it works to approximate.
+</div>
+<div class="panel-footer">
+- I was using the Hamming distance before, was the only thing I could easily find to measure
+distance between sequences, since that is what I have here. After the comment, I looked for other
+packages and functions and found this `ape - dist.dna()`. I don't know if it actually reflects
+what we wanted. You can let me know.
+</div></div>
+
+- I calculated the pairwise distance from MSAs of the resulting gene trees, and extracted the vectors belonging to the distances to `Anna` and to `Swift`. I did this using the `dist.dna()` function, from the
+`ape` `R` package, with the model `raw`. This function  computes a matrix of pairwise distances from DNA sequences using a model of DNA evolution. The model `raw` is simply the proportion or the number of sites that differ between each pair of sequences.
+
+
+```{R,eval=F}
+geneList=unlist(read.table(paste0(WD,"g.trees.to.filter.seqs.2.txt"), stringsAsFactors=F))
+distancesAnna=matrix(rep(0,length(geneList)*length(sampleNamesSwift)), length(geneList), length(sampleNamesSwift))
+distancesSwift=matrix(rep(0,length(geneList)*length(sampleNamesSwift)), length(geneList), length(sampleNamesSwift))
+rownames(distancesAnna)=geneList; colnames(distancesAnna)=sampleNamesSwift;
+rownames(distancesSwift)=geneList; colnames(distancesSwift)=sampleNamesSwift
+gtreefiles <- list.files(
+  path = paste0("/media/merly/Baymax/research/cph-visit/coverage-analysis/trees/seqs.2/"),
+  pattern="*.x.aa.aln.backTranslated")
+gtreefiles=paste0("/media/merly/Baymax/research/cph-visit/coverage-analysis/trees/seqs.2/",gtreefiles)
+labelsCorrect=c("H05","H01","H08","H03","H04","H06","H02","H07")
+labelsWronglyFormated=c("H5","H1","H8","H3","H4","H6","H2","H7")
+
+for (i in 1:length(gtreefiles)) {
+  print(i)
+  msa=as.matrix(read.FASTA(gzfile(gtreefiles[i])))
+  hammDist=as.matrix(dist.dna(msa, model="raw"))
+  indexAnna=which(startsWith(rownames(hammDist),"Aan"))
+  indexSwift=which(startsWith(rownames(hammDist),"Cpe"))
+  namesIds=which(rownames(hammDist) %in% labelsCorrect)
+  rownames(hammDist)[c(indexAnna, indexSwift, namesIds)]=c("AnnaBGI","SwiftBGI",labelsWronglyFormated)
+  colnames(hammDist)[c(indexAnna, indexSwift, namesIds)]=c("AnnaBGI","SwiftBGI",labelsWronglyFormated)
+  gene=strsplit(basename(gtreefiles[i]),"\\.")[[1]][1]
+  distancesAnna[gene,colnames(distancesAnna)]=hammDist[indexAnna,colnames(distancesAnna)]
+  distancesSwift[gene,colnames(distancesSwift)]=hammDist[indexSwift,colnames(distancesSwift)]
+}
+write.table(distancesAnna,file=paste0(WD,"distance.matrix.per.gene.anna.txt"), col.names=T,row.names=T)
+write.table(distancesSwift,file=paste0(WD,"distance.matrix.per.gene.swift.txt"), col.names=T,row.names=T)
+```
+
+- Afterwards, I filtered them to match those genes from which coverage was calculated.
+Leaving a total of  **623** genes to work with.
+
+```{R,eval=F}
+distancesAnna=read.table(file=paste0(WD,"distance.matrix.per.gene.anna.txt"), header=T)
+distancesSwift=read.table(file=paste0(WD,"distance.matrix.per.gene.swift.txt"), header=T)
+birds48filename=paste0(WD,"48birds_ortholog.list.chi.anna.cpe.hum.finch")
+birds=read.table(birds48filename, header=T,
+    colClasses=c("character","numeric","character","character",
+      "character","character","character"))
+
+birds.2=birds[birds$anna!="-",]
+birds.3=birds.2[birds.2$swift!="-",]
+birds.4=unique(birds.3)
+birds.5=birds.4[,c("anna","swift")]
+birds.5$swift=paste0("Parent=",birds.5$swift,";")
+birds.5$anna=paste0("Parent=Aan_", birds.5$anna,";")
+annaGenes=unique(gffAnna$V9)
+birds.6=birds.5[birds.5$anna %in% annaGenes, ]
+birds.6$swift.plain=unlist(strsplit(unlist(lapply(strsplit(birds.6$swift,"_"), function(x){x[[2]]})), ";"))
+birds.6$anna.plain=unlist(strsplit(unlist(lapply(strsplit(birds.6$anna,"_"), function(x){x[[2]]})), ";"))
+smallbird=birds.6[birds.6$anna.plain %in% intersect(birgit status
+                                                    ds.6$anna.plain,geneList),]
+distancesAnna=distancesAnna[smallbird$anna.plain,]
+distancesSwift=distancesSwift[smallbird$anna.plain,]
+rownames(distancesAnna)=smallbird$anna
+rownames(distancesSwift)=smallbird$swift
+```
+
+- Retrieved the coverage information per gene and filtered the coverage
+matrices to match the **623** resulting genes.
+
+```{R, eval=F}
+samplesFilenameAnna="/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/samples.txt"
+samplesFilenameSwift="/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/samples.txt"
+sampleNamesAnna=unlist(read.table(samplesFilenameAnna, stringsAsFactors = F))
+sampleNamesSwift=unlist(read.table(samplesFilenameSwift, stringsAsFactors = F))
+coverageMatrixFileAnna="/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/coverage.matrix.per.gene.txt"
+coverageMatrixFileSwift="/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/coverage.matrix.per.gene.txt"
+coverageMatrixAnna=read.table(coverageMatrixFileAnna, header=T)/genesAnna$Size
+coverageMatrixSwift=read.table(coverageMatrixFileSwift, header=T)/genesSwift$Size
+rownames(coverageMatrixAnna)=genesAnna$Gene
+rownames(coverageMatrixSwift)=genesSwift$Gene
+#-------------------------------------------------------------------------------
+cmswift=coverageMatrixSwift[smallbird$swift,]
+cmanna=coverageMatrixAnna[smallbird$anna,]
+cmanna=cbind(cmanna,AnnaBGI=rep(0,nrow(cmanna)), SwiftBGI=rep(0,nrow(cmanna)))
+```
+
+- Linear correlation was calculated after removing outliers in both coverage and distance
+- What is shown in the plot below is the relation between depth of coverage and phylogenetic distance
+per gene per sample. **623** genes were used. **48** Samples.
+
+<ul class="nav nav-tabs">
+<li class="active"><a href="#anna-cov-vs-dist-lm" data-toggle="tab">Anna - Coverage vs. distance (Corr)</a></li>
+<li><a href="#swift-cov-vs-dist-lm" data-toggle="tab">Swift - Coverage vs. distance (Corr)</a></li>
+</ul>
+
+<div id="myTabContent" class="tab-content">
+<div class="tab-pane fade active in" id="anna-cov-vs-dist-lm">
+
+<div class="panel panel-default">
+<div class="panel-body">
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/phylo.distance.coverage.genes.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/anna/phylo.distance.coverage.genes.png)
+
+*(Click image to enlarge)*
+
+```{bash, echo=F}
+cat /home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/lm.dist.cov.phylo.txt
+```
+
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/anna/phylo.distance.coverage.genes.lm.4.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/anna/phylo.distance.coverage.genes.lm.4.png)
+
+
+*(Click image to enlarge)*
+</div>
+</div>
+</div>
+
+<div class="tab-pane fade" id="swift-cov-vs-dist-lm">
+<div class="panel panel-default">
+<div class="panel-body">
+
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/phylo.distance.coverage.genes.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/swift/phylo.distance.coverage.genes.png)
+
+*(Click image to enlarge)*
+
+```{bash, echo=F}
+cat /home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/lm.dist.cov.phylo.txt
+```
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/swift/phylo.distance.coverage.genes.lm.4.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/swift/phylo.distance.coverage.genes.lm.4.png)
+
+
+*(Click image to enlarge)*
+</div>
+</div>
+</div>
+</div>
+
+
+
+
+### Detailed - pairs per species
+
+Now, the plots below show the relation between phylogenetic distance and coverage, of two (`2`)
+samples from the Cocquettes, Brilliants, Mangoes and Hermits groups, following the ML tree
+from the Hummingbird paper (F1,A). These samples correspond to one with high coverage and one
+with low coverage.
+
+
+<div class="row">
+<div class="col-lg-6">
+<div class="bs-component">
+<!-- /var/www/merly.escalona.com.es/web/research/phd/reports/cph-visit/empirical-analysis-4 -->
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/hummingbirds.paper.f1a.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/hummingbirds.paper.f1a.png)
+
+
+*(Click image to enlarge)*
+</div>
+</div>
+
+<div class="col-lg-6">
+<div class="bs-component">
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/hummingbird.paper.fig1.names.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/hummingbirds.paper.f1a.png)
+
+
+*(Click image to enlarge)*
+</div>
+</div>
+</div>
+
+
+<ul class="nav nav-tabs">
+<li class="active"><a href="#coquettes" data-toggle="tab">Coquettes</a></li>
+<li><a href="#brilliants" data-toggle="tab">Brilliants</a></li>
+<li><a href="#mangoes" data-toggle="tab">Mangoes</a></li>
+<li><a href="#hermits" data-toggle="tab">Hermits</a></li>
+</ul>
+
+<div id="myTabContent2" class="tab-content">
+
+<div class="tab-pane fade active in" id="coquettes>
+<div class="panel panel-default">
+<div class="panel-body">
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/corr.high.low.coverage.phylodist.vs.cov.coquettes.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/corr.high.low.coverage.phylodist.vs.cov.coquettes.png)
+
+*(Click image to enlarge)*
+</div>
+</div>
+</div>
+
+<div class="tab-pane fade" id="brilliants">
+<div class="panel panel-default">
+<div class="panel-body">
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/corr.high.low.coverage.phylodist.vs.cov.brilliants.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/corr.high.low.coverage.phylodist.vs.cov.brilliants.png)
+
+*(Click image to enlarge)*
+</div>
+</div>
+</div>
+
+<div class="tab-pane fade" id="mangoes">
+<div class="panel panel-default">
+<div class="panel-body">
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/corr.high.low.coverage.phylodist.vs.cov.mangoes.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/corr.high.low.coverage.phylodist.vs.cov.mangoes.png)
+
+*(Click image to enlarge)*
+</div>
+</div>
+</div>
+
+<div class="tab-pane fade" id="hermits">
+<div class="panel panel-default">
+<div class="panel-body">
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/corr.high.low.coverage.phylodist.vs.cov.hermits.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/corr.high.low.coverage.phylodist.vs.cov.hermits.png)
+
+*(Click image to enlarge)*
+</div>
+</div>
+</div>
+
+</div>
+
+### P - values
+
+```{R, echo=F}
+pvalues=read.table("/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/phylo.coverage.lm.pvalues.txt",
+  header=T, colClasses=c("character",rep("numeric", 4)))
+kable(pvalues,format="markdown")
+```
+
+
+
+# Summary
+
+- Important features of this report are the coverage distributions per individual/gene/target.
+- For _individual coverage distribution_, it looks like a bimodal distribution, but I have no knowledge on how of parameterize this distribution.
+    - I simulated the discussed (in April) coverage distribution for individuals, and here can be found the described scenarios:
+        - Scenario 1: alpha shape from LN:1.2,1 (http://merly.escalona.com.es/research/phd/reports/cph-visit/coverage.parameterization.LN1.2-1.html)
+        - Scenario 2: alpha shape from LN:1.4,1 (http://merly.escalona.com.es/research/phd/reports/cph-visit/coverage.parameterization.LN1.4-1.html)
+        - Scenario 3: alpha shape from LN:1.5,1 (http://merly.escalona.com.es/research/phd/reports/cph-visit/coverage.parameterization.LN1.5-1.html)
+- As for the _loci coverage distribution_, they can follow either a Poisson or also a Gamma distribution, I guess this depends on what we are going to call a "locus", if it is more a gene-like or a target-like definition.
+    - Considering loci as genes, coverage distribution should then follow a Poisson, mean `100` and standard deviation `~40`
+    - Considering targets of this experiment, coverage distribution can then be simulated with the Gamma-based multiplier already agreed for the individual coverage variation..
+- Percentage of _targets not captured_ is `~2%` which for this case is not known if it is just because of the capture, or if it is because
+some of the targets used for mapping were not used to design the probes.
+- _The on/off target coverage variation:_
+    - Taking into account the coverage of the on-target regions for this data (mean `~100x`), the off-target regions have less that 1% of
+    the mean coverage, and so I think that the variation predicted fits perfectly.
+- _Phylogenetic coverage decay:_  
+    1. For the analysis made with the concatenated tree in RaxML, results seem consistent with that found in the Bragg *et al.* paper.
+[![](/home/merly/git/cph-visit/coverage-analysis/empirical/data/general/Braggetal2015_cov_PD.png)](http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/general/Braggetal2015_cov_PD.png)
+    2. As for the information in the [*Detailed - pairs per species*](#detailed---pairs-per-species), since it is difficult to see any correlation with the
+    previous data, Rute suggested to check out the gene-coverage relation.  So I took 2 individuals from 4 main species which distance to the reference  increases from Coquettes towards Hermits (can be seen in the tree from the paper above). These individual where selected by their coverage,
+    getting a high and a low coverage patterns so it could be easier to see if there was any correlation.
+        - Disclaimers:
+            - The method used for the calculation of the phylogenetic distance may not be the proper one.
+            - I'm not completely confident that the correlation was computed correctly.
+        - From these I can only take into consideration the [p-values](#p---values) from the linear model fitting, which do not say for all that the existence of a linear correlation is statistically significant.
+
+
+**Source files**
+
+- Bash script with the commands for the coverage calculation [bash]  <a href="http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/src/empirical.coverage.analysis.server.anna.R" download="filename">Download</a>
+
+- On target coverage analysis [Rscript]  <a href="http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/src/empirical.coverage.analysis.server.anna.R" download="filename">Download</a>
+
+- Off target coverage analysis [Rscript]  <a href="http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/src/coverage.analysis.offtarget.anna.server.R" download="filename">Download</a>
+
+- Phylogenetic distance vs. depth of coverage (Gene-wise) <a href="http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/src/phylo.distance.coverage.R" download="filename">Download</a>
+
+- Phylogenetic distance vs. depth of coverage (RaxML)  <a href="http://merly.escalona.com.es/research/phd/reports/cph-visit/empirical-analysis-4/src/analysis.coverage.phylogenetic.decay.server.R" download="filename">Download</a>
+
+-------------------------------------------------------------------------------
+
+**References**
+<div id="anna-ref">
+- [1] Gilbert, M, P; Jarvis, E, D; Li, B; Li, C; Mello, C, V; The Avian Genome Consortium, ; Wang, J; Zhang, G (2014): Genomic data of the Anna's Hummingbird (Calypte anna). GigaScience Database.
+[DOI: 10.5524/101004](http://dx.doi.org/10.5524/101004)
+</div>
+<div id="swift-ref">
+- [2] Gilbert, M, P; Jarvis, E, D; Li, B; Li, C; The Avian Genome Consortium, ; Wang, J; Zhang, G (2014): Genomic data of the Chimney Swift (Chaetura pelagica). GigaScience Database.
+[DOI: 10.5524/101005 ](http://dx.doi.org/10.5524/101005)
+</div>
+<div id="Bleiweiss">
+- [3]: Bleiweiss R, Kirsch JAW, Matheus JC (1994) *DNA-DNA Hybridization Evidence for Sub-family Structure among Hummingbirds*. Auk 111(1):8–19.
+[DOI: 10.2307/4088500](http://www.jstor.org/stable/4088500)
+</div>
+<div id="McGuire">
+- [4]: McGuire JA, et al. (2014) *Molecular phylogenetics and the diversification of hummingbirds*. Curr Biol 24(8):910–6.
+[DOI: 10.1016/j.cub.2014.03.016](http://www.sciencedirect.com/science/article/pii/S0960982214002759)
+</div>
+<div id="raxml">
+- [5]: Stamatakis A (2014) *RAxML version 8: a tool for phylogenetic analysis and post-analysis of large phylogenies.* Bioinformatics 30(9):1312–1313.
+[DOI: 10.1093/bioinformatics/btu033](https://doi.org/10.1093/bioinformatics/btu033)
+</div>
+<div id="astral">
+- [6]: Mirarab S, et al. (2014) *ASTRAL: genome-scale coalescent-based species tree estimation.* Bioinformatics 30(17):i541–8.
+[DOI: 10.1093/bioinformatics/btu462](https://doi.org/10.1093/bioinformatics/btu462)
+</div>
+<div id="astralii">
+- [7]: Mirarab S, Warnow T (2015) *ASTRAL-II: coalescent-based species tree estimation with many hundreds of taxa and thousands of genes.* Bioinformatics 31(12):i44–52.
+[DOI: 10.1093/bioinformatics/btv234](https://doi.org/10.1093/bioinformatics/btv234)
+</div>
+<div id="jarvis">
+- [8]: Jarvis ED, et al. (2014) *Whole Genome Analyses Resolve the Early Branches in the Tree of Life of Modern Birds.* Science (80- ) 346(6215):1320–1331.
+[DOI: 10.1126/science.1253451](http://science.sciencemag.org/content/346/6215/1320)
+</div>
+<div id="phangorn">
+- [9]: Klaus Peter Schliep (2011) *phangorn: phylogenetic analysis in R.* Bioinformatics 27 (4): 592-593.
+[DOI: 10.1093/bioinformatics/btq706](https://doi.org/10.1093/bioinformatics/btq706)
+</div>
+<div id="braggs">
+- [10]: Bragg, JG., Potter, S., Bi. K. and Moritz, C. (2016) *Exon capture phylogenomics: efficacy across scales of divergence* Molecular Ecology Resources  16, 1059–1068.
+[DOI: 10.1111/1755-0998.12449](http://onlinelibrary.wiley.com/doi/10.1111/1755-0998.12449/pdf)
+</div>
+<div id="bedtools">
+- [22] Aaron R. Quinlan  Ira M. Hall (2010) *BEDTools: a flexible suite of utilities for comparing genomic features* Bioinformatics  26 (6): 841-842.
+[DOI: 10.1093/bioinformatics/btq033](https://doi.org/10.1093/bioinformatics/btq033)
+</div>
+
+<div id="angsd">
+- [10] Korneliussen, Thorfinn S. and Albrechtsen, Anders and Nielsen, Rasmus (2014) *ANGSD: Analysis of Next Generation Sequencing Data* BMC Bioinformatics 15:356.
+[DOI: 10.1186/s12859-014-0356-4](http://www.biomedcentral.com/1471-2105/15/356/abstract)
+</div>

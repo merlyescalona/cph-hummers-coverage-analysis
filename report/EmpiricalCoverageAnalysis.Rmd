@@ -1,0 +1,469 @@
+---
+title: "Analysis of coverage in capture experiments"
+author: "Merly Escalona <merlyescalona@uvigo.es>"
+output:
+  html_document:
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+  html_notebook:
+    theme: cosmo
+---
+
+
+# Introduction
+
+In order to integrate a new feature of on/off target levels of coverage in NGSphy, it is necessary to understand the different level of coverage that one could find in a capture experiment. 
+
+  - So, one of the goals of this analysis is to understand the coverage distribution within samples/loci to be able to model it for both NGSphy parameterization and simulations.
+  - Also, we would like to find out whether there is a correlation between the coverage and the phylogenetic distance to the reference species, used for the probe generatios. Expecting that the closer the sample is to the reference the higher the coverage obtained is.
+
+# Data
+
+Data used comes from  Rute's Hummingbird project I've been working basically with 2 datasets.
+
+1.  Dataset of BAM files corresponding to the mapping of the samples (46) to an ingroup, Aan (from now on called `map2Aan`).
+2.  Dataset of BAM files corresponding to the mapping of the samples (48) to an outgroup, Swift  (from now on called `map2Swift`).
+    - 46 samples + Aan + Swift
+
+## Details
+
+Workspace `triploid` (UVigo):
+
+  - Original data from Dataset 1, is stored in: `triploid.uvigo.es`
+  - Under the user folder: `/home/merly/research/cph-bam-coverage`
+
+Workspace `randy` (KU):
+
+  - Original data from Dataset 1 and 2, is stored in: `randy.popgen.dk`
+  - Under the user folder: 
+      - `/home/merly/map2Aan`
+      - `/home/merly/map2Swift`
+
+
+# Targeted regions
+
+Targeted regions are exons, retrieved a posteriori. This is due to the fact that some of this data was lost during a flood.
+
+Original target files given was a GFF file: `Calypte_anna.gene.CDS.2750.gff` (1.6M). This file was converted into a BED file, keeping only chromosome (scaffold), start and end position of the targets. 
+
+```
+GFF="$HOME/files/Calypte_anna.gene.CDS.2750.gff"
+cat $GFF | awk -v OFS='\t' '($5-$4)>0 {print $1,$4,$5}' > $HOME/files/targets.filtered.bed
+```
+
+## Description of the targeted regions
+
+```{R data.load, echo=F}
+pkgs=c("knitr","shiny","gplots","ggplot2")
+for (pkg in pkgs){suppressMessages(library(pkg,character.only=TRUE,quietly=TRUE))}
+targetsBedFile="/media/merly/Baymax/research/cph-visit/files/targets.filtered.bed"
+targets=read.table(targetsBedFile, stringsAsFactors=F)
+targets$V4=targets$V3-targets$V2
+colnames(targets)=c("Scaffold","Start","End","Size")
+rownames(targets)=paste0(
+  targets$Scaffold,
+  rep("-", nrow(targets)),
+  targets$Start,
+  rep("-", nrow(targets)),
+  targets$End)
+numTargets=nrow(targets)
+totalBases=sum(targets$Size)
+scaffoldsSplit=split(targets, targets$Scaffold)
+totalScaffolds=length(scaffoldsSplit)
+totalTargetPerScaffold=sapply(scaffoldsSplit,nrow)
+
+descriptionTargets=data.frame( 
+  NumTargets=prettyNum(numTargets, big.mark = ","),
+  SizeOfTargetedGenome=prettyNum(totalBases, big.mark = ","),
+  TotalScaffolds=prettyNum(totalScaffolds, big.mark = ",")
+  )
+colnames(descriptionTargets)=c(
+  "Number of targets",
+  "Size of targeted genome (bp)",
+  "Total of scaffolds"
+)
+kable(descriptionTargets,format="markdown")
+```
+
+## Number of targeted regions per scaffold
+
+```{R echo=F, fig.width=15}
+plot(totalTargetPerScaffold,pch=16, col="darkred", axes=F, xlab="Scaffolds", ylab="Number of targeted regions")
+axis(2); axis(1)
+```
+
+
+## Targeted regions size distribution
+
+```{R echo=F, fig.width=15}
+h=hist(targets$Size,
+     breaks =500,
+     axes=F,
+     col="darkgreen",border="white",
+     main="Targeted regions size distribution (zoom x-axis)",
+     xlab="Size (bp)",
+     xlim=c(0,1000), prob=T
+     )
+d=density(targets$Size)
+points(d,lwd=2, type="l")
+axis(1); axis(2)
+kable(t(summary(targets$Size)), format="markdown")
+```
+
+# Coverage analysis of empirical data (On-target)
+
+## Generation of on and off target datasets
+
+First, from the mappings given I separated the reads into `on target` and `off-target` sub-datasets, using the BED file of the targets and the `bedtools intersect` (v.2.22) program. Basically, doing this for both `map2Aan` and `map2Swift`. 
+
+```
+targetsFilteredBed="/media/merly/Baymax/research/cph-visit/files/targets.filtered.bed"
+for bamfile in $(find $HOME/map2Aan/originals -name "*.bam" ); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+  echo "nohup $HOME/src/bedtools2/bin/bedtools intersect -abam $bamfile -b $targetsFilteredBed > $HOME/map2Aan/targeted/${tag}.targeted.bam &"
+  echo "nohup $HOME/src/bedtools2/bin/bedtools intersect -v -abam $bamfile -b $targetsFilteredBed > $HOME/map2Aan/untargeted/${tag}.untargeted.bam &"
+done
+for bamfile in $(find $HOME/map2Swift/originals -name "*.bam" ); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')  
+  echo "nohup $HOME/src/bedtools2/bin/bedtools intersect -abam $bamfile -b $targetsFilteredBed > $HOME/map2Swift/targeted/${tag}.targeted.bam &"
+  echo "nohup $HOME/src/bedtools2/bin/bedtools intersect -v -abam $bamfile -b $targetsFilteredBed > $HOME/map2Swift/untargeted/${tag}.untargeted.bam &"
+done
+```
+
+Afterwards, I obtained the coverage of the targeted regions using `bedtools coverage -hist` as: 
+
+```
+for bamfile in $(find $HOME/map2Aan/originals -name "*.bam"); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+  echo "nohup /home/merly/src/bedtools2/bin/bedtools coverage -hist -abam $bamfile -b $targetsFilteredBed | gzip > $HOME/map2Aan/bedtools/cov/${tag}.cov.gz &"
+done
+for bamfile in $(find $HOME/map2Swift/originals -name "*.bam"); do
+  tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+  echo "nohup /home/merly/src/bedtools2/bin/bedtools coverage -hist -abam $bamfile -b $targetsFilteredBed | gzip > $HOME/map2Swift/bedtools/cov/${tag}.cov.gz &"
+done
+```
+
+This gives me:
+
+```
+-hist	
+      Report a histogram of coverage for each feature in A as well as a summary histogram for _all_ features in A.
+      Output (tab delimited) after each feature in A:
+        1) depth
+        2) # bases at depth
+        3) size of A
+        4) % of A at depth
+```
+
+And so, I filtered the output to keep the coverage per region and the summary histogram separated. 
+
+```
+(i.e)
+nohup zcat  $HOME/map2Aan/bedtools/cov/H09.cov.gz | grep -v ^all | gzip >  $HOME/map2Aan/bedtools/nohist/H09.nohist.gz &
+nohup zcat  $HOME/map2Aan/bedtools/cov/H09.cov.gz | grep  ^all | gzip  >    $HOME/map2Aan/bedtools/hist/H09.hist.gz &
+```
+
+## Breadth vs. depth
+
+
+With the information extracted from the `bedtools coverage -hist`, we can see the relation between the breadth of the coverage obtained and the depth per sample.
+
+![**Breadth vs. depth of coverage - map2Aan**](/media/merly/Baymax/research/cph-visit/map2Aan/img/2.breadth.vs.coverage.1.all.png)
+
+We can see here that we have: 
+
+  - For almost all samples (except 2), at least half of the expected targeted genome recovered at 50x.
+  - For almost all samples (except 2), ~ 90% of the targeted genome was recovered at 20x.
+  - The 2 sample exception were known to have low coverage.
+
+![**Breadth vs. depth of coverage - map2Swift**](/media/merly/Baymax/research/cph-visit/map2Swift//img/2.breadth.vs.coverage.2.zoom.500.png)
+
+
+We can see here that we have worst results, which is expected because this data set was mapped to an outgroup, and so the best samples are those used as reference Aan and Swift. As for the rest of the samples, around 1% of the targeted genome is 1x coverage.
+
+# Coverage per target
+
+From the information above, I was able to extract and compute the coverage per sample, and per target per sample.
+
+Coverage per target has been calculated as follows: I have obtained, per target, the number of times each nucleotide of a target has been recovered. Afterwards, this number is divided by the corresponding target size.
+
+## Overview
+Here we see the depth of coverage per target across all samples. This is an overview of all targets. "Red" targets are considered data-outliers based on the following process:
+
+```
+qnt <- quantile(data, probs=c(.25, .75))
+H <- 1.5 * IQR(data)
+y <- rep("black",length(data))
+y[data < (qnt[1] - H)] <- "red"
+y[data > (qnt[2] + H)] <- "red"
+```
+
+All coverage presented below, for the target regions is in a Log10 scale. 
+
+First we find the information for the `map2Aan` dataset. Lastly, the information from the `map2Swift` dataset, we can see a difference of up to 2 magnitudes.
+
+| Map2 - target | Coverage per target overview |
+|---------------|------------------------------|
+| `map2Ann`     | ![](/media/merly/Baymax/research/cph-visit/map2Aan/img/3.coverage.1.targets.all.png) |
+| `map2Swift`   | ![](/media/merly/Baymax/research/cph-visit/map2Swift/img/3.coverage.1.targets.all.png) |
+
+### Summary of coverage per target
+```{R,echo=F}
+covtargetsAan=unlist(read.table("/media/merly/Baymax/research/cph-visit/map2Aan/files/coverage.per.target.txt", stringsAsFactors=F, colClasses=c("character","numeric")))
+covtargetsSwift=unlist(read.table("/media/merly/Baymax/research/cph-visit/map2Swift/files/coverage.per.target.txt", stringsAsFactors=F, colClasses=c("character","numeric")))
+covSummary=data.frame(Aan=t(summary(covtargetsAan)), Swift=t(summary(covtargetsSwift)))
+rownames(covSummary)=covSummary[,2]
+covSummary=t(covSummary[,c(3,6)])
+covSummary[1:2,]=prettyNum(covSummary[1:2,],big.mark = ",")
+rownames(covSummary)=c("map2Aan","map2Swift")
+kable(covSummary,format="markdown")
+```
+
+
+## Relation coverage vs. target size
+
+Here, red sample points are those with depth of coverage equal to zero.
+
+| Map2 - target | depth vs. target size |
+|---------------|------------------------------|
+| `map2Aan` |![](/media/merly/Baymax/research/cph-visit/map2Aan/img/3.coverage.3.depth.vs.size.png) |
+| `map2Swift` |  ![](/media/merly/Baymax/research/cph-visit/map2Swift/img/3.coverage.3.depth.vs.size.png) |
+
+
+## Frequency of coverage per target
+
+| Map2 - target | depth vs. target size |
+|---------------|------------------------------|
+| `map2Aan` | ![](/media/merly/Baymax/research/cph-visit/map2Aan/img/3.coverage.4.freq.coverage.target.png) |
+| `map2Swift` | ![](/media/merly/Baymax/research/cph-visit/map2Swift/img/3.coverage.4.freq.coverage.target.png) | 
+
+
+# Coverage per sample
+
+![Coverage per sample - map2Aan ](/media/merly/Baymax/research/cph-visit/map2Aan/img/3.coverage.4.sample.all.png)
+
+```{R, echo=F}
+coveragePerSample=read.table("/media/merly/Baymax/research/cph-visit/map2Aan/files/coverage.per.sample.txt", stringsAsFactors=F, colClasses=c("character","numeric"))
+saan=summary(coveragePerSample[,1])
+kable(t(saan), format="markdown")
+```
+
+
+![Coverage per sample - map2swift ](/media/merly/Baymax/research/cph-visit/map2Swift/img/3.coverage.4.sample.all.png)
+
+```{R, echo=F}
+coveragePerSample=read.table("/media/merly/Baymax/research/cph-visit/map2Swift/files/coverage.per.sample.txt", stringsAsFactors=F, colClasses=c("character","numeric"))
+sswift=summary(coveragePerSample[,1])
+kable(t(sswift), format="markdown")
+```
+
+# Coverage overview
+
+While there is no specific color key for the coverage values, this will only serve as an overview of the coverage per target per sample. Yellow maximum coverage, red minimum coverage.
+
+## Coverage per sample per loci
+
+| Map2 - target | Coverage overview            |
+|---------------|------------------------------|
+| `map2Aan` | ![](/media/merly/Baymax/research/cph-visit/map2Aan/img/3.coverage.5.overview.png)| 
+| `map2Swift` | ![](/media/merly/Baymax/research/cph-visit/map2Swift/img/3.coverage.5.overview.png) |
+
+## ANGSD Depth calculations
+  This computes depth distribution for every sample and for all samples jointly. Computed wiht ANGSD [angsd version: 0.916 (htslib: 1.3.2) build(May  2 2017 16:21:49)].  
+
+```
+angsd -bam bam.filelist -doDepth 1 -out all -doCounts 1 -maxDepth 1000 
+```
+
+Output of ANGSD are 2 files:
+
+- `.depthSample`: This file contains nInd number of lines. Column1 is the number sites that has sequencing depth=0,Column2 is the number of sites that has sequencing depth=1 etc
+
+- `.depthGlobal`: The sequencing depth for all samples. 
+
+
+| Map2 - target | All reads | On-target | Off-target |
+|---------------|-----------|-----------|------------|
+| `map2Aan`   |![](/media/merly/Baymax/research/cph-visit/map2Aan/img/5.angsd.depth.all.map2Aan.png)|![](/media/merly/Baymax/research/cph-visit/map2Aan/img/5.angsd.depth.targeted.map2Aan.png)|![](/media/merly/Baymax/research/cph-visit/map2Aan/img/5.angsd.depth.untargeted.map2Aan.png)|
+| `map2Swift`   |![](/media/merly/Baymax/research/cph-visit/map2Swift/img/5.angsd.depth.all.map2Swift.png)|![](/media/merly/Baymax/research/cph-visit/map2Swift/img/5.angsd.depth.targeted.map2Swift.png)|![](/media/merly/Baymax/research/cph-visit/map2Swift/img/5.angsd.depth.untargeted.map2Swift.png)|
+
+
+
+# Fully captured targeted regions
+
+| Map2 - target | Coverage overview            |
+|---------------|------------------------------|
+| `map2Aan`   | ![](/media/merly/Baymax/research/cph-visit/map2Aan/img/4.capture.1.targets.fully.captured.png)|
+| `map2Swift`   | ![](/media/merly/Baymax/research/cph-visit/map2Swift/img/4.capture.1.targets.fully.captured.png) |
+
+# Targeted regions not captured
+
+Checking whether the targeted regions that were not capture are the same for all the samples. The reason why the regions matched is becuase the target regions file was generated a posteriori from a list of exons coming from the Chicken genome. It might be possible that:
+
+1. such exons are not present in these species
+2. the probes designed for such regions were not effective and, therefore, such regions were not recovered.
+3. also, taking into account that the second dataset is mapped to an outgroup, is possible that such targets were not even in the outgroup reference and so not captured.
+
+![Targeted regions not captured in both mappings](/media/merly/Baymax/research/cph-visit/img/notcaptured.rel.numsamples.png)
+
+
+We see then, that  there are ~400 targets that were not capture in the first dataset by any sample, and ~13K in the second dataset.
+
+```{R,echo=F}
+matrixs=read.table("/media/merly/Baymax/research/cph-visit/map2Swift/files/coverage.matrix.txt")
+matrixa=read.table("/media/merly/Baymax/research/cph-visit/map2Aan/files/coverage.matrix.txt")
+captureda=matrixa
+captureds=matrixs
+captureda[matrixa>0]=1
+captureds[matrixs>0]=1
+captureda[is.na(captureda)]=0
+captureds[is.na(captureds)]=0
+notcaptureda=1-captureda
+notcaptureds=1-captureds
+nca=rowSums(notcaptureda)
+ncs=rowSums(notcaptureds)
+ha=hist(nca, breaks=47,plot=F)
+hs=hist(ncs, breaks=47,plot=F)
+
+df=data.frame(nca=c(ha$counts[length(ha$counts)],
+              hs$counts[length(hs$counts)]
+              ))
+df=t(df)
+colnames(df)=c("map2Aan","map2Swift")
+rownames(df)="Number of targets (shared) that were not captured by any sample"
+df[1,]=prettyNum(df[1,],big.mark = ",")
+kable(df,format="markdown")
+```
+
+
+
+# Off-target regions across samples
+
+The idea is to identify the off-target regions, as well as the size that covers and how is the coverage distribution within this regions compared to the on-target coverage.
+
+To obtain the regions off-target I:
+
+1. used the `*.untargeted.bam` files (generated before -explained in [here](#generation-of-on-and-off-target-datasets)).
+2. Converted the `BAM` files into `BED`, to keep the positions mapped (`bedtoos bamtobed`)
+    ```
+    for bamfile in $(find $HOME/map2Aan/originals -name "*.bam"); do
+      tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+      echo "nohup /home/merly/src/bedtools2/bin/bedtools bamtobed -i $HOME/map2Aan/untargeted/$tag.untargeted.bam > $HOME/map2Aan/bed/$tag.untargeted.bed &"
+    done
+    for bamfile in $(find $HOME/map2Swift/originals -name "*.bam"); do
+      tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+      echo "nohup /home/merly/src/bedtools2/bin/bedtools bamtobed -i $HOME/map2Swift/untargeted/$tag.untargeted.bam > $HOME/map2Swift/bed/$tag.untargeted.bed &"
+    done
+    ```
+3. Sort the resulting files, to be able to merge them.
+    ```
+    for bamfile in $(find $HOME/map2Aan/originals -name "*.bam"); do
+      tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+      echo "nohup sort -k1,1 -k2,2n $HOME/map2Aan/bed/$tag.untargeted.bed > $HOME/map2Aan/bed/$tag.untargeted.sorted.bed &"
+    done
+    for bamfile in $(find $HOME/map2Swift/originals -name "*.bam"); do
+      tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+      echo "nohup sort -k1,1 -k2,2n $HOME/map2Swift/bed/$tag.untargeted.bed > $HOME/map2Swift/bed/$tag.untargeted.sorted.bed &"
+    done
+    ```
+4. Merged them, to obtained all overlapping regions.
+    ```
+    for bamfile in $(find $HOME/map2Aan/originals -name "*.bam"); do
+      tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+      echo "nohup bedtools merge -i $HOME/map2Aan/bed/$tag.untargeted.sorted.bed > $HOME/map2Aan/bed/$tag.untargeted.merged.bed &"
+    done
+    for bamfile in $(find $HOME/map2Swift/originals -name "*.bam"); do
+      tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+      echo "nohup bedtools merge -i $HOME/map2Swift/bed/$tag.untargeted.sorted.bed > $HOME/map2Swift/bed/$tag.untargeted.merged.bed &"
+    done
+    ```
+4. Concat and merged both `map2Aan` and `map2Swift` resulting `untergeted.bed` files
+```
+  cat /home/merly/map2Aan/files/untargeted.bed /home/merly/map2Swift/files/untargeted.bed > /home/merly/files/untargeted.all.1.bed
+  nohup /home/merly/src/bedtools2/bin/bedtools merge -i /home/merly/files/untargeted.all.1.bed | grep -v ^Error > /home/merly/files/untargeted.bed &
+```
+
+5. Used the `untargeted.bed` file to obtain the depth of coverage and breadth from the original files, meaning, retrieving coverage information from the off-target regions. This was done following the same procedure as in [here](#generation-of-on-and-off-target-datasets)).
+
+
+## Distribution of off-target regions across scaffolds
+
+![Ditribution of off-target regions accross scaffolds](/media/merly/Baymax/research/cph-visit/img/6.offtarget.1.num.offtargets.per.scaffold.png)
+
+## Size distribution of the off-target regions
+
+![Size ditribution of target](/media/merly/Baymax/research/cph-visit/img/6.offtarget.2.freq.sizes.png)
+
+```{R,echo=F}
+untargetedBedFile="/media/merly/Baymax/research/cph-visit/files/untargeted.bed"
+offtargets=read.table(untargetedBedFile,stringsAsFactors = F, colClasses = c("character","numeric","numeric"))
+offtargets$V4=offtargets$V3-offtargets$V2
+colnames(offtargets)=c("Scaffold","Start","End","Size")
+totalOfftarget=prettyNum(sum(offtargets$Size), big.mark = ",")
+descriptionTargets$TotalOffTarget=totalOfftarget
+colnames(descriptionTargets)[4]="Total off-targeted genome (bp)"
+kable(descriptionTargets,format="markdown")
+```
+
+## Breadth vs. depth of coverage of the off-target regions
+
+
+![map2Aan](/media/merly/Baymax/research/cph-visit/map2Aan/img/6.offtarget.3.breadth.vs.coverage.png)
+
+![map2Swift](/media/merly/Baymax/research/cph-visit/map2Swift/img/6.offtarget.3.breadth.vs.coverage.png)
+
+
+## Coverage per sample - off target regions
+
+| Map2 - target | Coverage overview            |
+|---------------|------------------------------|
+| `map2Aan` | ![](/media/merly/Baymax/research/cph-visit/map2Aan/img/7.offtarget.coverage.samples.png)| 
+| `map2Swift` | ![](/media/merly/Baymax/research/cph-visit/map2Swift/img/7.offtarget.coverage.samples.png) |
+
+
+
+
+# Relation within coverage and phylogenetic distance
+
+We are trying to analyze if there is any correlation between the coverage decay and the phylogenetic distance from the reference species, used for the probe generation and the coverage distribution obtained per sample. This analysis has been made based on Rute's Hummingbird data.
+
+Target for this experiments where exons, retrieved a posteriori. Size distribution of these targets is shown below.
+
+## Inferred phylogeny from Hummingbirds
+
+- `Cpe`, outgroup reference.
+- `Aan`, ingroup reference.
+
+![Inferred phylogeny](/media/merly/Baymax/research/cph-visit/img/inferred.phylogeny.png)
+
+## Distance Matrix from inferred phylogeny
+
+![Distance matrix](/media/merly/Baymax/research/cph-visit/img/distance.matrix.inferred.phylogeny.png)
+
+## Detailed
+| Map2 - target | Coverage overview            |
+|---------------|------------------------------|
+| `map2Aan` |  ![](/media/merly/Baymax/research/cph-visit/img/distance.to.ingroup.png) |
+| `map2Swift` | ![](/media/merly/Baymax/research/cph-visit/img/distance.to.outgroup.png) | 
+
+## Depth of coverage vs. phylogenetic distance
+
+This has been done following Bragg's paper, where depth of coverage is related to phylogenetic distance. It shows the median, plus or minus the 1st. and 3rd. quartiles, out of 46 samples.
+
+### Mapped to outgroup
+
+![Coverage vs. distance - map2Swift](/media/merly/Baymax/research/cph-visit/img/dist.vs.coverage.map2out.png)
+
+### Mapped to ingroup
+
+![Coverage vs. distance - map2Aan](/media/merly/Baymax/research/cph-visit/img/dist.vs.coverage.map2ingroup.png)
+
+## Correlations
+
+Only information related to dataset mapped to ingroup. It was not possible to get information from the other dataset because the standard deviations are 0. Also, we can see that there's no linear correlation between the distance and the coverage obtained from the experiment.
+
+```{R, echo=F}
+corrs=read.table("/media/merly/Baymax/research/cph-visit/files/correlation.coverage.vs.distance.txt")
+kable(corrs, format="markdown")
+```

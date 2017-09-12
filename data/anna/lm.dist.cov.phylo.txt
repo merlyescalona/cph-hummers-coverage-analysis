@@ -1,0 +1,19 @@
+
+Call:
+lm(formula = finalCoverageSwift ~ finalDistanceSwift)
+
+Residuals:
+   Min     1Q Median     3Q    Max 
+-62.29 -36.23 -12.25  23.84 152.52 
+
+Coefficients:
+                   Estimate Std. Error t value Pr(>|t|)    
+(Intercept)         62.9422     0.8903  70.696   <2e-16 ***
+finalDistanceSwift  -8.1952    11.2783  -0.727    0.467    
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Residual standard error: 48.22 on 20806 degrees of freedom
+Multiple R-squared:  2.538e-05,	Adjusted R-squared:  -2.269e-05 
+F-statistic: 0.528 on 1 and 20806 DF,  p-value: 0.4675
+

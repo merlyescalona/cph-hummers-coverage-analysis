@@ -1,0 +1,743 @@
+---
+title: "Analysis of coverage in capture experiments"
+author: "Merly Escalona <merlyescalona@uvigo.es>"
+output:
+html_notebook:
+html_document: 
+  theme: cosmo
+  toc: true
+  toc_float: true
+---
+
+```{R libraries, echo=F, message=F, warning=F}
+library(ggplot2)
+suppressWarnings(suppressMessages(library(gplots)))
+library(RColorBrewer)
+suppressWarnings(suppressMessages(library(knitr)))
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+cols <-getPalette(nrow(46))
+```
+
+
+# Introduction
+
+In order to integrate a new feature of on/off target levels of coverage in NGSphy, it is necessary to understand the different level os coverage
+that one could find in a capture experiment.
+
+
+# Data
+
+Data used comes from the hummingbirds project (Rute Fonseca`s project). The data includes 46 samples of hummingbirds, already mapped to a close reference.
+Final dataset correspond to the BAM files of such mapping.
+
+They are stored in:
+
+`triploid.uvigo.es`
+
+Under the user folder:
+
+`/home/merly/cph-bam-coverage`
+
+Data files are:
+
+|       Files                                          |   Files                                            |
+|------------------------------------------------------|----------------------------------------------------|
+|   H09_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H30_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H10_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H31_map2Anna_merge_pair.clean0.sort.bam           |
+|   H11_map2Anna_merge_pair.clean0.sort.bam            |  H33_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H12_map2Anna_merge_pair.clean0.sort.bam            |  H34_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H13_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H35_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H14_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H36_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H15_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H38_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H16_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H39_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H17_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H3_map2Anna_merge_pair.clean0.sort.bam            |
+|   H18_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H40_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H19_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H41_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H1_map2Anna_merge_pair.clean0.sort.bam             |  H42_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H20_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H43_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H21_map2Anna_merge_pair.clean0.sort.bam            |  H44_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H22_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H45_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H23_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H46_map2Anna_merge_pair.clean0.sort.bam           |
+|   H24_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H47_map2Anna_merge_pair.clean0.sort.bam           |
+|   H25_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H48_map2Anna_single-b1HiS_pair.clean0.sort.bam    |
+|   H26_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H4_map2Anna_merge_pair.clean0.sort.bam            |
+|   H27_map2Anna_merge_pair.clean0.sort.bam            |  H5_map2Anna_merge_pair.clean0.sort.bam            |
+|   H28_map2Anna_merge_pair.clean0.sort.bam            |  H6_map2Anna_merge_pair.clean0.sort.bam            |
+|   H29_map2Anna_single-b1HiS_pair.clean0.sort.bam     |  H7_map2Anna_merge_pair.clean0.sort.bam            |
+|   H2_map2Anna_merge_pair.clean0.sort.bam             |  H8_map2Anna_merge_pair.clean0.sort.bam            |
+
+
+
+# Targeted regions
+
+```{R data.load, echo=F}
+# setwd("/home/merly/git/cph-visit/coverage-analysis")
+d=read.table("Calypte_anna.gene.CDS.2750.gff", stringsAsFactors=F)
+numTargets=nrow(d)
+dd=(as.numeric(d[,5])-as.numeric(d[,4]))+1
+totalBases=prettyNum(sum(dd), big.mark = ",")
+scaffoldsSplit=split(d, d$V1)
+totalScaffolds=length(scaffoldsSplit)
+totalTargetPerScaffold=sapply(scaffoldsSplit,nrow)
+```
+
+There is a GFF file with the information of the targeted regions of interest.
+
+```
+Calypte_anna.gene.CDS.2750.gff 
+```
+
+This file contains: 
+- **`r prettyNum(numTargets, big.mark = ",")`** targeted regions.
+- That correspond to  **`r totalBases`** of bases targeted.
+- Belonging to  **`r totalScaffolds`**  scaffolds.
+
+## Number of targeted regions per scaffold
+
+```{R echo=F, fig.width=15, fig.heigth=7}
+plot(totalTargetPerScaffold,pch=16, col="darkred", axes=F, xlab="Scaffolds", ylab="Number of targeted regions")
+axis(2); axis(1)
+```
+
+
+## Targeted regions size
+
+```{R echo=F, fig.width=15}
+targets=data.frame(read.table("targets.bed"), stringsAsFactors = F)
+colnames(targets)=c("Scaffold","Start", "End")
+targets$size=targets$End - targets$Start
+hist(targets$size,
+     breaks =500, 
+     axes=F,
+     col="darkgreen",border="white",
+     main="Targeted regions size (zoom x-axis)", 
+     xlab="Size (bp)",
+     xlim=c(0,1000)
+     )
+axis(1); axis(2)
+```
+
+#### Summary information
+
+```{R, echo=F}
+kable(t(summary(targets$size)), format="markdown")
+```
+
+
+# Data generation
+
+First, to get the coverage information of the targeted regions I used `bedtools coverage` and filtered the histogram generated
+
+```
+module load bio/bedtols/2.22.0
+# Following this process:
+# http://www.gettinggeneticsdone.com/2014/03/visualize-coverage-exome-targeted-ngs-bedtools.html
+# Bedtools protocol followed:
+# https://github.com/arq5x/bedtools-protocols/blob/master/bedtools.md#ap2b-assessing-coverage-in-exome-capture-experiments
+
+captureRegion="$HOME/cph-bam-coverage/Calypte_anna.gene.CDS.2750.gff"
+for bamfile in $(find $HOME/cph-bam-coverage/bam/ -name "*.bam"); do
+tag=$(echo $(basename $bamfile) | tr "_" " " | awk '{print $1}')
+echo $tag
+bedtools coverage -hist -abam $bamfile -b $captureRegion> "bedtools/${tag}.cov"
+done
+
+for bamfile in $(find $HOME/cph-bam-coverage/bedtools/ -name "*.cov"); do
+tag=$(basename $bamfile .cov)
+echo $tag
+cat "${tag}.cov" | grep "^all" > "$HOME/cph-bam-coverage/bedtools/${tag}.filtered.cov"
+done
+```
+
+
+# Coverage analysis
+
+This is information realted to the percentage of cumulative coverage per sample. Basically, depth of coverage compared to breadth of coverage.
+
+```{R, echo=FALSE, fig.width=15, fig.height=12, message=FALSE, warning=FALSE}
+# cov= read.table("/home/merly/git/cph-visit/empirical-coverage-analysis/hummers/data/bedtools/H1.filtered.cov")
+# Reading data
+files <- list.files(
+  path = "empirical/bedtools/",
+  pattern="filtered.cov$")
+prelabs<-strsplit(basename(files),"\\.")
+labs=list()
+for(i in 1:length(prelabs)){
+  labs[i]<-prelabs[[i]][1]
+}
+files=paste0("empirical/bedtools/",files)
+
+cov <- list()
+cov_cumul <- list()
+fcov <- list()
+fcov_cumul <- list()
+
+for (i in 1:length(files)) {
+  cov[[i]] <- read.table(files[i])
+  cov_cumul[[i]] <- 1-cumsum(cov[[i]][,5])
+  fcov[[i]]<-cov[[i]][cov[[i]][,2]<=500,]
+  fcov_cumul[[i]] = 1 - cumsum(fcov[[i]][,5])
+  
+}
+
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+cols <-getPalette(length(cov))
+```
+
+## Breadth of captured regions vs. depth of coverage
+
+```{R, echo=FALSE, fig.width=15, fig.height=12, message=FALSE, warning=FALSE}
+plot(cov[[1]][2:nrow(cov[[1]]),2], cov_cumul[[1]][2:length(cov_cumul[[1]])],
+     col='darkred', type='l', lwd=2,
+     xlab="Depth of coverage",
+     ylab="Fraction of capture target bases >= depth\n Breadth of coverages",
+     ylim=c(0,1.0)
+)
+for (i in 1:length(cov)){
+  points(cov[[i]][2:nrow(cov[[i]]), 2],
+         cov_cumul[[i]][2:length(cov_cumul[[i]])],
+         type='l',
+         lwd=3,
+         col=cols[i])
+}
+
+abline(v = 20, col = "gray60")
+abline(v = 50, col = "gray60")
+abline(v = 80, col = "gray60")
+abline(v = 100, col = "gray60")
+abline(v = 200, col = "gray60")
+abline(v = 300, col = "gray60")
+abline(h = 0.50, col = "gray60")
+abline(h = 0.90, col = "gray60")
+axis(1, at=c(20,50,80), labels=c(20,50,80))
+axis(2, at=c(0.90), labels=c(0.90))
+axis(2, at=c(0.50), labels=c(0.50))
+
+legend("topright", legend=labs, col=cols, lty=1, lwd=4)
+suppressMessages(dev.print(pdf, "bedtools.coverage.target.hummers.full.pdf"))
+
+# im going to filter out things that have >500x
+
+```
+
+
+## Zoomed depth of coverage lower than 500
+
+```{R, echo=FALSE, fig.width=15, fig.height=12, message=FALSE, warning=FALSE}
+plot(fcov[[1]][2:nrow(fcov[[1]]),2],
+     fcov_cumul[[1]][2:length(fcov_cumul[[1]])],
+     col='darkred', type='l', lwd=2,
+     xlab="Depth of coverage",
+     ylab="Fraction of capture target bases >= depth\n Breadth of coverages",
+     ylim=c(0,1.0),
+     main="Filtered maxDepth <=500x"
+)
+
+for (i in 1:length(fcov)){
+  points(fcov[[i]][2:nrow(fcov[[i]]), 2],
+         fcov_cumul[[i]][2:length(fcov_cumul[[i]])],
+         type='l',
+         lwd=3,
+         col=cols[i])}
+
+abline(v = 20, col = "gray60")
+abline(v = 50, col = "gray60")
+abline(v = 80, col = "gray60")
+abline(v = 100, col = "gray60")
+abline(v = 200, col = "gray60")
+abline(v = 300, col = "gray60")
+abline(h = 0.50, col = "gray60")
+abline(h = 0.90, col = "gray60")
+axis(1, at=c(20,50,80), labels=c(20,50,80))
+axis(2, at=c(0.90), labels=c(0.90))
+axis(2, at=c(0.50), labels=c(0.50))
+
+legend("topright", legend=labs, col=cols, lty=1, lwd=4)
+suppressMessages(dev.print(pdf, "bedtools.coverage.target.hummers.pdf"))
+
+```
+
+
+# Percentage of fully captured targeted regions
+
+
+This was done by analyzing the results from the `bedtools coverage` step. Where I first, obtain the regions that have at least a position with 1x coverage.
+
+```
+
+for bamfile in $(find $HOME/cph-bam-coverage/bedtools/ -name "*.cov" | grep -v filtered); do
+tag=$(basename $bamfile .cov)
+echo $tag
+nTargets=$(cat $bamfile | grep -v ^all | awk '$10>0 {print $1,$4,$5}' | uniq | wc -l | awk '{print $1}')
+echo -e "$tag\t$nTargets" >> numTargets.per.sample.txt
+done
+```
+
+## Percentage of regions captured per sample
+
+```{R echo=T,fig.width=15, fig.heigth=7}
+nTargetedRegions=read.table("numTargets.per.sample.txt")
+# nTargetedRegions
+plot(1:nrow(nTargetedRegions), ((nTargetedRegions[,2]/numTargets))*100,axes=F, ylab="Percentage of targeted regions fully captured", xlab="Samples", pch=16, col="darkred", ylim=c(95,100))
+axis(2, at=seq(95,100), las=2)
+axis(1, at=seq(1,nrow(nTargetedRegions)),labels=nTargetedRegions[,1],las=2)
+
+```
+
+Afterwards, I extracted the regions where all the sites have coverage 0.
+
+```
+for bamfile in $(find $HOME/cph-bam-coverage/bedtools/ -name "*.cov" | grep -v filtered); do
+tag=$(basename $bamfile .cov)
+echo $tag
+cat $bamfile | grep -v ^all | awk '$10==0 {print $1,$4,$5}' | uniq > "$HOME/cph-bam-coverage/targetZero/$tag.target.zero.txt"
+done
+
+```
+
+
+## Percentage of sites with 0 coverage, per all samples
+
+```{R echo=T,fig.width=15, fig.heigth=7}
+zeroCover=lapply(cov,function(x){(x[1,3]/x[1,4])*100})
+zeroCoverageDF=data.frame(samples=labs, zerocoverage=zeroCover)
+dlabs=c()
+for (item in labs){dlabs=c(dlabs,item)}
+plot(1:length(labs),zeroCover, axes=F, ylab="Percentage of not covered sites", xlab="Samples", pch=16, col="darkred")
+axis(2)
+axis(1, at=seq(1,length(dlabs)),labels=dlabs,las=2)
+
+suppressMessages(suppressWarnings(dev.print(pdf, "bedtools.zerocoverage.pdf")))
+```
+
+
+
+Checking whether the targeted regions that were not capture are the same for all the samples
+
+
+```{R, fig.height=10, fig.width=10, echo=F}
+# Reading data
+filesZero <- list.files(
+  path = "empirical/targetZero/",
+  pattern="txt$")
+ftz=paste0("empirical/targetZero/",filesZero)
+targetZero <- list()
+setsTargetZero <- list()
+scaffolds <- list()
+sizes<-list()
+for (i in 1:length(ftz)) {
+  targetZero[[i]] <- read.table(ftz[i],stringsAsFactors = T)
+  setsTargetZero[[i]]<-paste0(targetZero[[i]][,1],"-",targetZero[[i]][,2],"-",targetZero[[i]][,3])
+  scaffolds[[i]]<-paste0(targetZero[[i]][,1])
+  sizes[[i]]<-(targetZero[[i]][,3]-targetZero[[i]][,2])+1
+  names(sizes[[i]])<-setsTargetZero[[i]]
+}
+
+ss=lapply(setsTargetZero,length)
+s=0
+for(item in 1:length(ss)){
+  s=s+ss[[item]]
+}
+allScaffolds=Reduce(union,scaffolds)
+intersectedRegions=Reduce(intersect, setsTargetZero)
+allRegions=Reduce(union, setsTargetZero)
+allData=data.frame(matrix(0,nrow=length(labs), ncol=length(allRegions)))
+rownames(allData)<-labs
+colnames(allData)<-allRegions
+
+histSizes=list()
+
+for (i in 1:length(ftz)) {
+  allData[i,intersect(colnames(allData),setsTargetZero[[i]])]=1
+  histSizes[[i]]<-sizes[[i]][intersectedRegions]
+}
+
+heatmap(as.matrix(allData),Rowv = NA, Colv = NA, col=paste("gray",1:99,sep=""))
+```
+
+
+## Sizes of the targets not captured across all samples
+### Overview
+```{R echo=F, fig.width=10}
+unlistedHist=unlist(histSizes)
+hist(unlistedHist,breaks=150, xlab="Read size (bp)",col="darkgreen",border="white", main="")
+abline(v=50, col="darkred")
+abline(v=100, col="darkred")
+abline(v=120, col="darkred")
+abline(v=mean(unlistedHist), col="blue")
+```
+
+### Zoom
+```{R echo=F, fig.width=10}
+hist(unlistedHist,breaks=1000,xlab="Read size (bp)", xlim=c(0,1000),col="darkgreen",border="white", main="", axes=F)
+abline(v=50, col="darkred")
+abline(v=100, col="darkred")
+abline(v=120, col="darkred")
+abline(v=mean(unlistedHist), col="blue")
+axis(2)
+axis(1,at=c(0,50,100,120,round(mean(unlistedHist)),
+            seq(200,1000,200)),
+     labels = c(0,50,100,120,paste0("~",round(mean(unlistedHist))),
+            seq(200,1000,200)),
+     las=2)
+```
+
+### Size of targeted regions not captured (Summary)
+```{R echo=F}
+kable(t(summary(unlistedHist)), format="markdown")
+```
+
+### Information in terms of numbers
+
+```{R echo=F}
+df=data.frame(Intersection=length(intersectedRegions), Union=length(allRegions), scaffolds=length(allScaffolds))
+colnames(df)<-c("**Number of targeted regions missing throusgh all samples**", 
+                "**Number of the different targeted regions missing though all the sampless**", 
+                "**Number of different scaffolds**")
+rownames(df)=c("Value")
+kable(t(df),format="markdown")
+```
+
+
+## Average coverage per targeted region
+
+```{R echo=F}
+# filesFiltered <- list.files(
+#   path = "empirical/bedtools/",
+#   pattern="*.no.hist.cov$")
+# ffil=paste0("empirical/bedtools/",filesFiltered)
+# 
+# # t=read.table(ffil[1],stringsAsFactors = T)
+# tcov=list()
+# covPerTarget=data.frame(targetRegion=c(),
+#                         sample=c(),
+#                         avgCoverage=c())
+# sizes=c()
+# for (i in 1:length(ffil)) {
+#   print(i)
+#   tcov[[i]] <- read.table(ffil[i],stringsAsFactors = T)
+#   tcov[[i]]$targetRegion=paste0(
+#     tcov[[i]]$V1,"-",
+#     tcov[[i]]$V4,"-",
+#     tcov[[i]]$V5)
+#   ind=tcov[[i]]
+#   sample=labs[i][[1]]
+#   dataSplit=split(ind, ind$targetRegion)
+#   meanCoverage=sapply(dataSplit,function(x){mean(x$V10)})
+#   targetRegionsInSample=names(meanCoverage)
+#   covPerTarget=rbind(
+#     covPerTarget,
+#     cbind(
+#       targetRegionsInSample,
+#       rep(sample, length(targetRegionsInSample)),
+#       unlist(meanCoverage)
+#     )
+#   )
+#   remove(dataSplit)
+#   sizes=c(sizes,ind$V12)
+# }
+# 
+# coverageALL=list()
+# for (i in 1:length(ffil)){
+#   print(i)
+#   ind=tcov[[i]]
+#   sample=labs[i][[1]]
+#   dataSplit=split(ind, ind$targetRegion)
+#   coverageALL[[i]]=sapply(dataSplit,function(x){
+#     perSample=split(x,x$V2)
+#     sapply(perSample,function(y){sum(y$V10)})
+#   })
+#   write.table(coverageALL[[i]],file=paste0("allcoveragePerTargetRegion/", filesFiltered[i],".txt"))
+# }
+# write.table(covPerTarget,file = "cov.per.target.csv", sep = ",",row.names = F)
+# write.table(sizes,file = "sizes.targeted.txt", row.names = F)
+
+filesFiltered <- list.files(
+  path = "empirical/allcoveragePerTargetRegion/",
+  pattern="*.no.hist.cov.txt$")
+covFiles=paste0("empirical/allcoveragePerTargetRegion/",filesFiltered)
+targetSizes=read.table("empirical/targets.bed",stringsAsFactors = F)
+targetSizes$size=targetSizes$V3-targetSizes$V2
+rownames(targetSizes)=paste0(targetSizes$V1,"-",targetSizes$V2,"-",targetSizes$V3)
+targetSizes$accCoverage=rep(0,nrow(targetSizes))
+coverageALL=list()
+for (i in 1:length(covFiles)){
+    data=read.table(covFiles[i], stringsAsFactors = F,header = T)
+    data$size=rep(0,nrow(data))
+    # For some reason the suffix ".Genewise was added to the target naame"
+    rownames(data)=unlist(lapply(strsplit(rownames(data),"\\."),function(x){x[1]}))
+    matches=intersect(rownames(targetSizes),rownames(data))
+    data[matches,]$size=targetSizes[matches,]$size
+    targetSizes[matches,]$accCoverage=sum(targetSizes[matches,]$accCoverage,data[matches,1])
+    coverageALL[[i]]=data
+    
+}
+targetSizes$expectedCoverage=targetSizes$accCoverage/targetSizes$size
+splitCPT=split(covPerTarget,covPerTarget$targetRegionsInSample)
+
+## Average
+covPerTarget=read.table("cov.per.target.csv",sep=",",stringsAsFactors = F,header = T)
+sizes=scan("sizes.targeted.txt")
+splitCovPerTarget=split(covPerTarget,covPerTarget$targetRegionsInSample)
+avgCoveragePerTarget=sapply(splitCovPerTarget,function(x){mean(x$V3)})
+avgCoveragePerSample=sapply(splitCovPerTarget,function(x){mean(x$V3)})
+
+
+length(avgCoveragePerTarget)
+boxplot(avgCoveragePerTarget,type="l", ylab="Average Coverage", xlab="Target region")
+```
+
+## Average coverage per targeted regions (outliers excluded)
+
+This is the function used to exclude the outliers:
+
+```{R}
+remove_outliers <- function(x, na.rm = TRUE, ...) {
+  qnt <- quantile(x, probs=c(.25, .75), na.rm = na.rm, ...)
+  H <- 1.5 * IQR(x, na.rm = na.rm)
+  y <- x
+  y[x < (qnt[1] - H)] <- NA
+  y[x > (qnt[2] + H)] <- NA
+  y
+}
+```
+
+
+```{R echo=F}
+avgCoveragePerTargetWOO=remove_outliers(avgCoveragePerTarget)
+boxplot(avgCoveragePerTargetWOO,type="l", ylab="Average Coverage", xlab="Target region")
+```
+
+Which lead to **`r length(avgCoveragePerTargetWOO[is.na(avgCoveragePerTargetWOO)])`** sites excluded.
+
+## Average coverage of outlier targeted regions
+```{R echo=F}
+par(mfrow=c(1,2))
+outlierTargets=avgCoveragePerTarget[is.na(avgCoveragePerTargetWOO)]
+plot(outlierTargets, ylab="Average Coverage", xlab="Target region (outliers)")
+mean(outlierTargets[outlierTargets<3000])
+plot(outlierTargets, ylab="", xlab="Target region (outliers)", ylim=c(0,1000))
+```
+
+
+
+
+
+## Coverage per target per sample (100 target regions)
+
+```{R, fig.height=15, fig.width=15, cache=T}
+avgCoveragePerTargetPerSample=sapply(splitCovPerTarget,function(x){
+  splitSample=split(x,x$V2)
+  sapply(splitSample,function(y){mean(y$V3)})
+})
+
+heatmap(as.matrix(avgCoveragePerTargetPerSample[,1:100]), Rowv = NA,Colv = NA)
+
+sizes=unlist(sizes)
+tableSizes=table(sizes)
+tableSizes=data.frame(tableSizes)
+maxFreq=max(as.numeric(tableSizes$Freq))
+maxSize=max(as.numeric(as.character(tableSizes$sizes)))
+```
+
+
+## Depth per site from targeted regions
+```{R echo=F}
+hist(sizes, breaks = 100, col="darkgreen",border="white")
+hist(sizes, breaks = 300, col="darkgreen",border="white", xlim=c(0,1000))
+```
+
+<!-- ### Sizes of targeted and captured regions -->
+```{R echo=F }
+# hist=hist(tcov[[1]]$V12,breaks=200, plot=F)
+# breaks=hist$breaks[1:(length(hist$breaks)-1)]
+# plot(
+#   breaks,
+#   hist$counts,
+#   type="l",lwd=2,col="darkred",
+#   xlab="Size (bp)",ylab="Frequency",
+#   ylim=c(0, maxFreq), xlim=c(0,maxSize))
+# for (i in 1:length(ffil)){
+#   ind=tcov[[i]]
+#   histInd=hist(tcov[[i]]$V12,breaks=200, plot=F)
+#   points(
+#     breaks,
+#     histInd$counts,
+#     type="l",
+#     lwd=3,
+#     col=cols[i]
+#   )
+# }
+# plot(
+#   breaks,
+#   hist$counts,
+#   type="l",lwd=2,col="darkred",
+#   xlab="Size (bp)",ylab="Frequency",
+#   ylim=c(0, maxFreq), xlim=c(0,400))
+# for (i in 1:length(ffil)){
+#   ind=tcov[[i]]
+#   histInd=hist(tcov[[i]]$V12,breaks=200, plot=F)
+#   points(
+#     breaks,
+#     histInd$counts,
+#     type="l",
+#     lwd=3,
+#     col=cols[i]
+#   )
+# }
+
+
+
+# for (i in 1:length(ffil)){
+#   ind=tcov[[i]]
+#   png(filename=paste0("empirical/imgs/",labs[i],".png"),
+#       width=800,height=500, units="px")
+#   hist=hist(ind$V12, breaks=200,
+#        main=paste("Target region sizes","\nSample",labs[i]),
+#        xlab="Size (bp)",ylim=c(0, maxFreq), xlim=c(0,maxSize))
+#   plot(hist$)
+#   abline(v=mean(ind$V12), col="red")
+#   dev.off()
+# }
+
+
+```
+
+
+
+## ANGSD Depth calculations 
+
+```{R, echo=F}
+sampleLabels=unlist(read.table("label.samples.txt", stringsAsFactors = F))
+angsdAllSampleFile="empirical/angsd-depth/all.depthSample"
+angsdAllGlobalFile="empirical/angsd-depth/all.depthGlobal"
+angsdTargetedSampleFile="empirical/angsd-depth/filtered.depthSample"
+angsdTargetedGlobalFile="empirical/angsd-depth/filtered.depthGlobal"
+angsdUntargetedSampleFile="empirical/angsd-depth/untargeted-captured.depthSample"
+angsdUntargetedGlobalFile="empirical/angsd-depth/untargeted-captured.depthGlobal"
+
+allSample=data.frame(log10(t(read.table(angsdAllSampleFile))))
+allGlobal=log10(scan(angsdAllGlobalFile))
+rownames(allSample)=paste0(1:nrow(allSample), "x")
+colnames(allSample)=sampleLabels
+
+targetedSample=data.frame(log10(t(read.table(angsdTargetedSampleFile))))
+targetedGlobal=log10(scan(angsdTargetedGlobalFile))
+rownames(targetedSample)=paste0(1:nrow(targetedSample), "x")
+colnames(targetedSample)=sampleLabels
+
+untargetedSample=data.frame(log10(t(read.table(angsdUntargetedSampleFile))))
+untargetedGlobal=log10(scan(angsdUntargetedGlobalFile))
+rownames(untargetedSample)=paste0(1:nrow(untargetedSample), "x")
+colnames(untargetedSample)=sampleLabels
+```
+
+## Depth of coverage per sample (all)
+
+```{R, echo=F,fig.height=8,fig.width=8}
+heatmap.2(as.matrix(allSample), Rowv=NULL,Colv=NULL,
+          key.title = "",
+          key.xlab="number of sites (log10)",
+          key.ylab = "Frequency", 
+          scale="none",
+          margins=c(3,1), # ("margin.Y", "margin.X")
+          trace='none', 
+          symkey=FALSE, 
+          symbreaks=FALSE, 
+          dendrogram='none',
+          density.info='histogram', 
+          denscol="black",
+          keysize=0.5, 
+          #( "bottom.margin", "left.margin", "top.margin", "left.margin" )
+          key.par=list(mar=c(5,0,3,0)),
+          # lmat -- added 2 lattice sections (5 and 6) for padding
+          lmat=rbind(c(5, 4, 2), c(6, 1, 3)), lhei=c(2.5, 5), lwid=c(1, 10, 1)
+          )
+```
+
+## Depth of coverage per sample (Targeted)
+
+```{R,echo=F, fig.height=8,fig.width=8}
+heatmap.2(as.matrix(targetedSample), Rowv=NULL,Colv=NULL,
+          key.title = "",
+          key.xlab="number of sites (log10)",
+          key.ylab = "Frequency",
+          scale="none",
+          margins=c(3,1), # ("margin.Y", "margin.X")
+          trace='none', 
+          symkey=FALSE, 
+          symbreaks=FALSE, 
+          dendrogram='none',
+          density.info='histogram', 
+          denscol="black",
+          keysize=0.5, 
+          #( "bottom.margin", "left.margin", "top.margin", "left.margin" )
+          key.par=list(mar=c(5,0,3,0)),
+          # lmat -- added 2 lattice sections (5 and 6) for padding
+          lmat=rbind(c(5, 4, 2), c(6, 1, 3)), lhei=c(2.5, 5), lwid=c(1, 10, 1))
+```
+
+## Depth of coverage per sample (Untargeted)
+
+```{R, echo=F, fig.height=8,fig.width=8}
+heatmap.2(as.matrix(untargetedSample),Rowv=NULL,Colv=NULL, 
+          key.title = "",
+          key.xlab="number of sites (log10)",
+          key.ylab = "Frequency",
+          scale="none",
+          margins=c(3,1), # ("margin.Y", "margin.X")
+          trace='none', 
+          symkey=FALSE, 
+          symbreaks=FALSE, 
+          dendrogram='none',
+          density.info='histogram', 
+          denscol="black",
+          keysize=0.5, 
+          #( "bottom.margin", "left.margin", "top.margin", "left.margin" )
+          key.par=list(mar=c(5,0,3,0)),
+          # lmat -- added 2 lattice sections (5 and 6) for padding
+          lmat=rbind(c(5, 4, 2), c(6, 1, 3)), lhei=c(2.5, 5), lwid=c(1, 10, 1)
+          )
+```
+
+
+#### General coverage levels (Log-scale) 
+```{R echo=F, fig.width=10}
+ymaxlim=10
+xmaxlim=max(length(allGlobal),length(targetedGlobal),length(untargetedGlobal))
+selectedColors=c("darkred","darkgreen","darkblue")
+plot(
+	allGlobal,
+	type="l",
+	lwd=2,
+	xlab="Depth",ylab="Frequency (Log10)",
+	xlim=c(0,xmaxlim),
+	ylim=c(0,ymaxlim),
+	col=selectedColors[1]
+)
+points(targetedGlobal,	type="l",lwd=2,col=selectedColors[2])
+points(untargetedGlobal, type="l", lwd=2, col=selectedColors[3])
+dataTypeLabels=c("All", "Targeted", "Untargeted")
+legend("bottomright", legend=dataTypeLabels, col=selectedColors, lty=1, lwd=4)
+```
+
+
+#### Coverage level per sample
+```{R fig.width=10, fig.height=15}
+par(mfrow=c(3,1))
+plot(allSample[,1], type="l",col="darkred",lwd=2,xlab="Depth", ylab="Frequency (Log10)",ylim=c(2,9), main="All")
+for (i in 2:ncol(allSample)){
+  points(allSample[, i],type='l',lwd=3,col=cols[i])
+}
+
+plot(targetedSample[,1], type="l",col="darkred",lwd=2,xlab="Depth", ylab="Frequency (Log10)",ylim=c(2,9), main="Targeted")
+for (i in 2:ncol(targetedSample)){
+  points(targetedSample[, i],type='l',lwd=3,col=cols[i])
+}
+
+plot(untargetedSample[,1], type="l",col="darkred",lwd=2,xlab="Depth", ylab="Frequency (Log10)",ylim=c(2,9), main="Untargeted")
+for (i in 2:ncol(untargetedSample)){
+  points(untargetedSample[, i],type='l',lwd=3,col=cols[i])
+}
+```
+
